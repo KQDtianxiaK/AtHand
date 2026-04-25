@@ -109,6 +109,7 @@ class AiControlSessionOut(BaseModel):
     created_at: dt.datetime
     updated_at: dt.datetime
     attention: bool = False
+    attention_reason: str | None = None
     persistence_handle: AiControlPersistenceHandle | None = None
     capabilities: AiControlCapabilitiesOut | None = None
 
@@ -193,6 +194,7 @@ class AiControlHistoryItemOut(BaseModel):
     updated_at: dt.datetime
     last_message_preview: str | None = None
     attention: bool = False
+    attention_reason: str | None = None
     persistence_handle: AiControlPersistenceHandle | None = None
 
 

@@ -629,6 +629,7 @@ class AiControlBridgeService:
             created_at=self._parse_timestamp(snapshot.get("createdAt")),
             updated_at=self._parse_timestamp(snapshot.get("updatedAt")),
             attention=bool(snapshot.get("requiresAttention", False)),
+            attention_reason=snapshot.get("attentionReason") if isinstance(snapshot.get("attentionReason"), str) else None,
             persistence_handle=self._persistence_handle_out(snapshot.get("persistence")),
             capabilities=self._capabilities_out(snapshot.get("capabilities")),
         )
@@ -809,6 +810,7 @@ class AiControlBridgeService:
             updated_at=self._parse_timestamp(agent.get("updatedAt")),
             last_message_preview=None,
             attention=bool(agent.get("requiresAttention", False)),
+            attention_reason=agent.get("attentionReason") if isinstance(agent.get("attentionReason"), str) else None,
             persistence_handle=self._persistence_handle_out(agent.get("persistence")),
         )
 

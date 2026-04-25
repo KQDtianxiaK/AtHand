@@ -214,6 +214,7 @@ export interface AiControlSession {
   created_at: string
   updated_at: string
   attention: boolean
+  attention_reason: string | null
   persistence_handle: AiControlPersistenceHandle | null
   capabilities: AiControlCapabilities | null
 }
@@ -259,6 +260,7 @@ export interface AiControlHistoryItem {
   updated_at: string
   last_message_preview: string | null
   attention: boolean
+  attention_reason: string | null
   persistence_handle: AiControlPersistenceHandle | null
 }
 
