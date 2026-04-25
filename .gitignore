@@ -1,0 +1,50 @@
+# Root-level runtime artifacts
+.paseo-athand/
+
+# Unrelated local scratch content
+follow-builders-main/
+胡渊鸣-我给10个claude-code打工.md
+
+# Keep only the shared workspace task
+.vscode/*
+!.vscode/tasks.json
+
+# OS/editor metadata
+.DS_Store
+*.log
+*~
+*.swp
+*.swo
+*:Zone.Identifier
+
+# Environment files
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.venv/
+**/venv/
+**/*.db
+**/*.db-journal
+
+# Node / frontend build outputs
+**/node_modules/
+**/.vite/
+**/dist/
+**/build/
+**/.next/
+**/coverage/
+**/*.tsbuildinfo
+
+# Common local tooling caches
+**/.cache/
+**/.wrangler/
+**/.paseo/
+**/.playwright-mcp/
+**/.paseo-provider-history/
+**/test-results/

@@ -1,0 +1,22 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Start Paseo daemon (AtHand)",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "cd paseo-main && npx -y -p node@22 -p npm@10 bash -lc 'set -e; if [[ ! -d node_modules ]]; then npm install --include-workspace-root --ignore-scripts; node scripts/postinstall-patches.mjs; fi; if [[ ! -f packages/relay/dist/e2ee.js ]]; then npm run build --workspace=@getpaseo/relay; fi; if [[ ! -d packages/highlight/dist ]]; then npm run build --workspace=@getpaseo/highlight; fi; PASEO_HOME=/home/kangkai/AtHand/.paseo-athand PASEO_LISTEN=127.0.0.1:6767 PASEO_RELAY_ENABLED=0 PASEO_DICTATION_ENABLED=0 PASEO_VOICE_MODE_ENABLED=0 PASEO_NODE_INSPECT=0 npm run dev --workspace=@getpaseo/server -- --no-mcp'"
+      ],
+      "isBackground": true,
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": false
+      },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+# Agent Daemon 配置
+# 复制此文件为 config.yaml 后修改
+
+# ECS 后端 WebSocket 地址
+hub_url: "ws://localhost:8000/ws/agent"
+
+# 本机器 ID（唯一标识，如 pc1 / workstation / server1）
+machine_id: "my-machine"
+
+# 预共享 Token（需与 ECS 端 .env 中 AGENT_TOKEN 一致）
+agent_token: "change-me-to-a-random-token"
+
+# 心跳间隔（秒）
+heartbeat_interval: 30
+
+# 文件操作白名单目录（只允许访问这些目录下的文件）
+allowed_dirs:
+  - "~"
+
+# Kimi Code 可执行文件路径（通常 kimi 即可）
+kimi_command: "kimi"
