@@ -69,6 +69,8 @@ class AiControlBridgeService:
     _RPC_TIMEOUT_SECONDS = 8.0
     _WS_OPEN_TIMEOUT_SECONDS = 5.0
     _PASEO_CLIENT_APP_VERSION = "0.1.50"
+    _HISTORY_PREVIEW_TEXT_LIMIT = 220
+    _HISTORY_PREVIEW_TIMELINE_LIMIT = 12
 
     def __init__(self) -> None:
         self._machine_daemon_map = self._parse_machine_daemon_map(settings.ai_control_machine_daemons)
@@ -460,6 +462,56 @@ class AiControlBridgeService:
         )
         return responses[0]
 
+    async def _fetch_history_preview_map(
+        self,
+        daemon_url: str,
+        *,
+        agent_ids: list[str],
+    ) -> dict[str, str | None]:
+        ordered_agent_ids: list[str] = []
+        seen_agent_ids: set[str] = set()
+        for agent_id in agent_ids:
+            normalized_agent_id = agent_id.strip()
+            if not normalized_agent_id or normalized_agent_id in seen_agent_ids:
+                continue
+            seen_agent_ids.add(normalized_agent_id)
+            ordered_agent_ids.append(normalized_agent_id)
+
+        if not ordered_agent_ids:
+            return {}
+
+        requests: list[tuple[dict[str, Any], str]] = []
+        for agent_id in ordered_agent_ids:
+            requests.append(
+                (
+                    {
+                        "type": "fetch_agent_timeline_request",
+                        "requestId": self._next_request_id("history-preview"),
+                        "agentId": agent_id,
+                        "direction": "tail",
+                        "limit": self._HISTORY_PREVIEW_TIMELINE_LIMIT,
+                        "projection": "projected",
+                    },
+                    "fetch_agent_timeline_response",
+                )
+            )
+
+        _, responses = await self._connect_and_exchange(daemon_url, requests)
+        preview_map: dict[str, str | None] = {}
+        for agent_id, payload in zip(ordered_agent_ids, responses):
+            if not isinstance(payload, dict):
+                preview_map[agent_id] = None
+                continue
+
+            error = payload.get("error")
+            if isinstance(error, str) and error:
+                preview_map[agent_id] = None
+                continue
+
+            preview_map[agent_id] = self._history_preview_from_timeline_payload(payload)
+
+        return preview_map
+
     @staticmethod
     def _normalize_permission_response(body: AiControlPermissionBody) -> dict[str, Any]:
         response: dict[str, Any] = {"behavior": body.behavior}
@@ -794,7 +846,94 @@ class AiControlBridgeService:
             ),
         )
 
-    def _history_item_out(self, machine_id: str, entry: dict[str, Any]) -> AiControlHistoryItemOut | None:
+    @staticmethod
+    def _history_entry_agent_id(entry: dict[str, Any]) -> str | None:
+        agent = entry.get("agent")
+        if not isinstance(agent, dict):
+            return None
+
+        agent_id = agent.get("id")
+        if not isinstance(agent_id, str) or not agent_id:
+            return None
+
+        return agent_id
+
+    def _normalize_history_preview(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+
+        normalized = " ".join(value.split())
+        if not normalized:
+            return None
+
+        if len(normalized) <= self._HISTORY_PREVIEW_TEXT_LIMIT:
+            return normalized
+
+        clipped = normalized[: self._HISTORY_PREVIEW_TEXT_LIMIT - 1].rstrip()
+        return f"{clipped}…"
+
+    def _history_preview_from_timeline_payload(self, payload: dict[str, Any]) -> str | None:
+        entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+        for entry in reversed(entries):
+            if not isinstance(entry, dict):
+                continue
+
+            item = self._timeline_item_out(entry)
+            if item is None:
+                continue
+
+            if item.kind in {"assistant_message", "user_message", "todo", "error"}:
+                preview = self._normalize_history_preview(item.text)
+                if preview:
+                    return preview
+
+            if item.kind == "tool_call" and item.result:
+                error = item.result.get("error") if isinstance(item.result, dict) else None
+                if isinstance(error, str) and error:
+                    tool_name = item.tool_name or "工具"
+                    return self._normalize_history_preview(f"{tool_name} 执行失败: {error}")
+
+        return None
+
+    def _history_preview_map_from_entries(
+        self,
+        daemon_url: str,
+        entries: list[dict[str, Any]],
+    ) -> dict[str, str | None]:
+        preview_map: dict[str, str | None] = {}
+        missing_agent_ids: list[str] = []
+
+        for entry in entries:
+            agent_id = self._history_entry_agent_id(entry)
+            if not agent_id:
+                continue
+
+            preview_map[agent_id] = None
+            missing_agent_ids.append(agent_id)
+
+        if not missing_agent_ids:
+            return preview_map
+
+        try:
+            fetched_preview_map = self._run_async(
+                self._fetch_history_preview_map(
+                    daemon_url,
+                    agent_ids=missing_agent_ids,
+                )
+            )
+        except (AiControlBridgeTimeoutError, AiControlBridgeTransportError, AiControlBridgeProtocolError, ValueError):
+            return preview_map
+
+        preview_map.update(fetched_preview_map)
+        return preview_map
+
+    def _history_item_out(
+        self,
+        machine_id: str,
+        entry: dict[str, Any],
+        *,
+        last_message_preview: str | None = None,
+    ) -> AiControlHistoryItemOut | None:
         agent = entry.get("agent")
         if not isinstance(agent, dict):
             return None
@@ -808,7 +947,7 @@ class AiControlBridgeService:
             status=str(agent.get("status") or "unknown"),
             created_at=self._parse_timestamp(agent.get("createdAt")),
             updated_at=self._parse_timestamp(agent.get("updatedAt")),
-            last_message_preview=None,
+            last_message_preview=last_message_preview,
             attention=bool(agent.get("requiresAttention", False)),
             attention_reason=agent.get("attentionReason") if isinstance(agent.get("attentionReason"), str) else None,
             persistence_handle=self._persistence_handle_out(agent.get("persistence")),
@@ -1022,13 +1161,17 @@ class AiControlBridgeService:
                 limit=limit,
             )
         )
-        entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+        entries = [entry for entry in payload.get("entries", []) if isinstance(entry, dict)]
+        preview_map = self._history_preview_map_from_entries(daemon_url, entries)
         items = [
             item
             for item in (
-                self._history_item_out(machine.id, entry)
+                self._history_item_out(
+                    machine.id,
+                    entry,
+                    last_message_preview=preview_map.get(self._history_entry_agent_id(entry) or ""),
+                )
                 for entry in entries
-                if isinstance(entry, dict)
             )
             if item is not None and (provider is None or item.provider == provider)
         ]
