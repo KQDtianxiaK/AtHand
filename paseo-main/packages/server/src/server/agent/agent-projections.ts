@@ -23,6 +23,7 @@ interface ProjectionOptions {
   title?: string | null;
   createdAt?: string;
   internal?: boolean;
+  lastMessage?: string | null;
 }
 
 function normalizeThinkingOptionId(value: string | null | undefined): string | null {
@@ -78,6 +79,7 @@ export function toStoredAgentRecord(
     runtimeInfo,
     features: normalizeFeatures(agent.features),
     persistence,
+    lastMessage: options?.lastMessage ?? null,
     lastError: agent.lastError ?? undefined,
     requiresAttention: agent.attention.requiresAttention,
     attentionReason: agent.attention.requiresAttention ? agent.attention.attentionReason : null,

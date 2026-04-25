@@ -5756,6 +5756,15 @@ export class Session {
     });
 
     const pagedEntries = matchedEntries.slice(0, limit);
+    const responseEntries =
+      request.type === "fetch_agent_history_request"
+        ? await Promise.all(
+            pagedEntries.map(async (entry) => ({
+              ...entry,
+              lastMessage: await this.agentManager.getLastAssistantMessage(entry.agent.id),
+            })),
+          )
+        : pagedEntries;
     const hasMore = matchedEntries.length > limit;
     const nextCursor =
       hasMore && pagedEntries.length > 0
@@ -5763,7 +5772,7 @@ export class Session {
         : null;
 
     return {
-      entries: pagedEntries,
+      entries: responseEntries,
       pageInfo: {
         nextCursor,
         prevCursor: request.page?.cursor ?? null,

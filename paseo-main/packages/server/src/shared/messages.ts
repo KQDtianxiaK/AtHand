@@ -2140,6 +2140,7 @@ export const AgentListMessageSchema = z.object({
 const AgentDirectoryResponseEntrySchema = z.object({
   agent: AgentSnapshotPayloadSchema,
   project: ProjectPlacementPayloadSchema,
+  lastMessage: z.string().nullable().optional(),
 });
 
 const AgentDirectoryPageInfoSchema = z.object({
