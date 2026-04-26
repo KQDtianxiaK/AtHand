@@ -1,7 +1,6 @@
 """
-WebSocket Hub：管理 Agent Daemon 连接、前端 Dashboard 连接。
+WebSocket Hub：管理 Agent Daemon 连接。
 - /ws/agent/{machine_id}?token=xxx  → Agent Daemon 连入
-- /ws/dashboard?token=xxx           → 前端实时推送
 """
 from __future__ import annotations
 
@@ -19,48 +18,21 @@ router = APIRouter()
 
 
 class AgentHub:
-    """管理所有 Agent Daemon 和 Dashboard 的 WebSocket 连接。"""
+    """管理所有 Agent Daemon WebSocket 连接。"""
 
     def __init__(self):
         # machine_id → WebSocket
         self.agents: dict[str, WebSocket] = {}
-        # 前端 dashboard 连接列表
-        self.dashboards: list[WebSocket] = []
         # machine_id → 待响应 future（用于 request/response 模式）
         self._pending: dict[str, asyncio.Future] = {}
 
     async def connect_agent(self, machine_id: str, ws: WebSocket):
         self.agents[machine_id] = ws
         logger.info("Agent connected: %s", machine_id)
-        await self.broadcast_dashboard({"type": "agent_online", "machine_id": machine_id})
 
     def disconnect_agent(self, machine_id: str):
         self.agents.pop(machine_id, None)
         logger.info("Agent disconnected: %s", machine_id)
-        # 广播离线（fire-and-forget）
-        asyncio.create_task(
-            self.broadcast_dashboard({"type": "agent_offline", "machine_id": machine_id})
-        )
-
-    async def connect_dashboard(self, ws: WebSocket):
-        self.dashboards.append(ws)
-        # 发送当前在线机器列表
-        await ws.send_json({"type": "agents_list", "agents": list(self.agents.keys())})
-
-    def disconnect_dashboard(self, ws: WebSocket):
-        if ws in self.dashboards:
-            self.dashboards.remove(ws)
-
-    async def broadcast_dashboard(self, data: dict):
-        """向所有前端 dashboard 广播消息。"""
-        dead = []
-        for ws in self.dashboards:
-            try:
-                await ws.send_json(data)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect_dashboard(ws)
 
     async def send_task(self, machine_id: str, task_data: dict) -> bool:
         """向指定 Agent 发送任务。返回是否发送成功。"""
@@ -147,23 +119,10 @@ async def ws_agent(ws: WebSocket, machine_id: str, token: str = Query(...)):
                     db.close()
 
             elif msg_type == "task_output":
-                # Kimi Code 流式输出 → 转发给 dashboard + 存储到数据库
-                await agent_hub.broadcast_dashboard({
-                    "type": "task_output",
-                    "machine_id": machine_id,
-                    "task_id": data.get("task_id"),
-                    "message": data.get("message"),
-                })
                 # 存消息到 DB
                 _save_message(data)
 
             elif msg_type == "task_done":
-                await agent_hub.broadcast_dashboard({
-                    "type": "task_done",
-                    "machine_id": machine_id,
-                    "task_id": data.get("task_id"),
-                    "exit_code": data.get("exit_code"),
-                })
                 _finish_task(data)
 
             elif msg_type == "response":
@@ -171,13 +130,6 @@ async def ws_agent(ws: WebSocket, machine_id: str, token: str = Query(...)):
                 req_id = data.get("req_id")
                 if req_id:
                     agent_hub.resolve_request(req_id, data.get("data", {}))
-
-            elif msg_type == "system_info":
-                await agent_hub.broadcast_dashboard({
-                    "type": "system_info",
-                    "machine_id": machine_id,
-                    "info": data.get("info"),
-                })
 
     except WebSocketDisconnect:
         pass
@@ -238,26 +190,3 @@ def _finish_task(data: dict):
             db.commit()
     finally:
         db.close()
-
-
-# ---------- Dashboard WebSocket 端点 ----------
-@router.websocket("/ws/dashboard")
-async def ws_dashboard(ws: WebSocket, token: str = Query(...)):
-    # 验证 JWT
-    from jose import JWTError, jwt as jose_jwt
-    try:
-        jose_jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-    except JWTError:
-        await ws.close(code=4001, reason="认证失败")
-        return
-
-    await ws.accept()
-    await agent_hub.connect_dashboard(ws)
-    try:
-        while True:
-            # Dashboard 端也可以发消息（如请求刷新）
-            await ws.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        agent_hub.disconnect_dashboard(ws)
