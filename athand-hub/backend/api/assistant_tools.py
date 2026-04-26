@@ -4,6 +4,7 @@ AI 助手的 Tool 函数定义。
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import ipaddress
@@ -18,7 +19,7 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
-from models import ClockRecord, Email, EmailAccount, EmailFolder, Memo, Task, Todo, TodoList
+from models import ClockRecord, Email, EmailAccount, EmailFolder, Memo, Todo, TodoList
 
 logger = logging.getLogger("assistant_tools")
 
@@ -176,9 +177,9 @@ TOOL_SCHEMAS: list[dict] = [
                 "properties": {
                     "prompt": {"type": "string", "description": "任务提示词"},
                     "machine_id": {"type": "string", "description": "机器 ID（可选，不填则选第一台在线机器）"},
-                    "work_dir": {"type": "string", "description": "工作目录（可选）"},
+                    "work_dir": {"type": "string", "description": "工作目录（必填，bridge 创建会话需要）"},
                 },
-                "required": ["prompt"],
+                "required": ["prompt", "work_dir"],
             },
         },
     },
@@ -495,56 +496,50 @@ async def send_kimi_task(prompt: str, machine_id: str | None = None,
     from api.ai_control_schemas import AiControlCreateSessionBody
     from services.ai_control_bridge import bridge_service
 
-    db: Session = SessionLocal()
-    try:
-        if not machine_id:
-            machines = bridge_service.list_machines(db)
-            machine = next((item for item in machines if item.daemon_reachable), None)
-            if not machine:
-                machine = next((item for item in machines if item.is_online), None)
-            if not machine:
-                return _ok({"ok": False, "error": "没有可用的 paseo 机器"})
-            machine_id = machine.id
+    resolved_work_dir = (work_dir or "").strip()
+    if not resolved_work_dir:
+        return _ok({"ok": False, "error": "请提供 work_dir"})
 
-        resolved_work_dir = (work_dir or "").strip()
-        if not resolved_work_dir:
-            latest_task = (
-                db.query(Task)
-                .filter(Task.machine_id == machine_id, Task.work_dir.isnot(None))
-                .order_by(Task.created_at.desc())
-                .first()
+    def create_session_sync() -> dict[str, object]:
+        db: Session = SessionLocal()
+        try:
+            resolved_machine_id = machine_id
+            if not resolved_machine_id:
+                machines = bridge_service.list_machines(db)
+                machine = next((item for item in machines if item.daemon_reachable), None)
+                if not machine:
+                    machine = next((item for item in machines if item.is_online), None)
+                if not machine:
+                    return {"ok": False, "error": "没有可用的 paseo 机器"}
+                resolved_machine_id = machine.id
+
+            session = bridge_service.create_session(
+                AiControlCreateSessionBody(
+                    machine_id=resolved_machine_id,
+                    provider="kimi",
+                    cwd=resolved_work_dir,
+                    initial_prompt=prompt,
+                ),
+                db,
             )
-            if latest_task and latest_task.work_dir:
-                resolved_work_dir = latest_task.work_dir.strip()
+            return {
+                "ok": True,
+                "agent_id": session.agent_id,
+                "machine_id": session.machine_id,
+                "provider": session.provider,
+                "cwd": session.cwd,
+                "status": session.status,
+            }
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            return {"ok": False, "error": detail}
+        except Exception as exc:
+            logger.exception("send_kimi_task failed")
+            return {"ok": False, "error": f"创建 Kimi 会话失败: {exc}"}
+        finally:
+            db.close()
 
-        if not resolved_work_dir:
-            return _ok({"ok": False, "error": "请提供 work_dir，或先在该机器上创建过带工作目录的会话"})
-
-        session = bridge_service.create_session(
-            AiControlCreateSessionBody(
-                machine_id=machine_id,
-                provider="kimi",
-                cwd=resolved_work_dir,
-                initial_prompt=prompt,
-            ),
-            db,
-        )
-        return _ok({
-            "ok": True,
-            "agent_id": session.agent_id,
-            "machine_id": session.machine_id,
-            "provider": session.provider,
-            "cwd": session.cwd,
-            "status": session.status,
-        })
-    except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-        return _ok({"ok": False, "error": detail})
-    except Exception as exc:
-        logger.exception("send_kimi_task failed")
-        return _ok({"ok": False, "error": f"创建 Kimi 会话失败: {exc}"})
-    finally:
-        db.close()
+    return _ok(await asyncio.to_thread(create_session_sync))
 
 
 def list_machines() -> str:
@@ -649,26 +644,24 @@ def fetch_url(url: str) -> str:
 
 
 def get_stats() -> str:
+    from api.stats import build_stats_overview
+
     db: Session = SessionLocal()
     try:
-        total = db.query(Task).count()
-        done = db.query(Task).filter(Task.status == "done").count()
-        failed = db.query(Task).filter(Task.status == "failed").count()
+        overview = build_stats_overview(days=7, db=db)
         todo_total = db.query(Todo).count()
         todo_done = db.query(Todo).filter(Todo.is_done.is_(True)).count()
 
-        # 今日工时
-        today_records = db.query(ClockRecord).filter(
-            ClockRecord.clock_out.is_not(None),
-        ).all()
         today_hours = 0.0
-        today = dt.date.today()
-        for r in today_records:
-            if r.clock_in.date() == today:
-                today_hours += (r.clock_out - r.clock_in).total_seconds() / 3600
+        if overview["daily_work_hours"]:
+            today_hours = float(overview["daily_work_hours"][-1]["total"])
 
         return _ok({
-            "tasks": {"total": total, "done": done, "failed": failed},
+            "tasks": {
+                "total": overview["total_tasks"],
+                "done": overview["done_tasks"],
+                "failed": overview["failed_tasks"],
+            },
             "todos": {"total": todo_total, "done": todo_done, "undone": todo_total - todo_done},
             "today_work_hours": round(today_hours, 2),
         })

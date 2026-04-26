@@ -13,8 +13,7 @@ from models import ClockRecord, Task
 router = APIRouter(prefix="/api/stats", tags=["stats"], dependencies=[Depends(get_current_user)])
 
 
-@router.get("/overview")
-def overview(days: int = 7, db: Session = Depends(get_db)):
+def build_stats_overview(days: int, db: Session):
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
 
     total_tasks = db.query(func.count(Task.id)).filter(Task.created_at >= since).scalar()
@@ -86,3 +85,8 @@ def overview(days: int = 7, db: Session = Depends(get_db)):
         "total_work_hours": round(total_hours, 1),
         "daily_work_hours": daily_work_hours,
     }
+
+
+@router.get("/overview")
+def overview(days: int = 7, db: Session = Depends(get_db)):
+    return build_stats_overview(days=days, db=db)
