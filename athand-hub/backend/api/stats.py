@@ -90,15 +90,15 @@ def build_stats_overview(days: int, db: Session):
     history_items = _collect_deduped_bridge_history(db)
     recent_items = [item for item in history_items if item.created_at >= since]
 
-    total_tasks = len(recent_items)
-    done_tasks = sum(1 for item in recent_items if _is_done(item))
-    failed_tasks = sum(1 for item in recent_items if _is_failed(item))
+    total_sessions = len(recent_items)
+    done_sessions = sum(1 for item in recent_items if _is_done(item))
+    failed_sessions = sum(1 for item in recent_items if _is_failed(item))
 
-    daily_task_counts: dict[str, int] = defaultdict(int)
-    machine_task_counts: dict[str, int] = defaultdict(int)
+    daily_session_counts: dict[str, int] = defaultdict(int)
+    machine_session_counts: dict[str, int] = defaultdict(int)
     for item in recent_items:
-        daily_task_counts[str(item.created_at.date())] += 1
-        machine_task_counts[item.machine_id] += 1
+        daily_session_counts[str(item.created_at.date())] += 1
+        machine_session_counts[item.machine_id] += 1
 
     # 工时统计（含分段）
     clock_records = (
@@ -136,17 +136,29 @@ def build_stats_overview(days: int, db: Session):
         })
 
     return {
-        "total_tasks": total_tasks,
-        "done_tasks": done_tasks,
-        "failed_tasks": failed_tasks,
-        "success_rate": round(done_tasks / total_tasks * 100, 1) if total_tasks else 0,
+        "total_sessions": total_sessions,
+        "done_sessions": done_sessions,
+        "failed_sessions": failed_sessions,
+        "success_rate": round(done_sessions / total_sessions * 100, 1) if total_sessions else 0,
+        "daily_sessions": [
+            {"day": day, "count": count}
+            for day, count in sorted(daily_session_counts.items())
+        ],
+        "machine_sessions": [
+            {"machine_id": machine_id, "count": count}
+            for machine_id, count in sorted(machine_session_counts.items())
+        ],
+        # Temporary aliases for compatibility with older callers.
+        "total_tasks": total_sessions,
+        "done_tasks": done_sessions,
+        "failed_tasks": failed_sessions,
         "daily_tasks": [
             {"day": day, "count": count}
-            for day, count in sorted(daily_task_counts.items())
+            for day, count in sorted(daily_session_counts.items())
         ],
         "machine_tasks": [
             {"machine_id": machine_id, "count": count}
-            for machine_id, count in sorted(machine_task_counts.items())
+            for machine_id, count in sorted(machine_session_counts.items())
         ],
         "total_work_hours": round(total_hours, 1),
         "daily_work_hours": daily_work_hours,

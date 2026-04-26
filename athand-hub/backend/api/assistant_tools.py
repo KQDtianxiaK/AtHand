@@ -657,10 +657,15 @@ def get_stats() -> str:
             today_hours = float(overview["daily_work_hours"][-1]["total"])
 
         return _ok({
+            "sessions": {
+                "total": overview["total_sessions"],
+                "done": overview["done_sessions"],
+                "failed": overview["failed_sessions"],
+            },
             "tasks": {
-                "total": overview["total_tasks"],
-                "done": overview["done_tasks"],
-                "failed": overview["failed_tasks"],
+                "total": overview["total_sessions"],
+                "done": overview["done_sessions"],
+                "failed": overview["failed_sessions"],
             },
             "todos": {"total": todo_total, "done": todo_done, "undone": todo_total - todo_done},
             "today_work_hours": round(today_hours, 2),

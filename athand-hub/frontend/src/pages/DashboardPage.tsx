@@ -110,19 +110,19 @@ export default function DashboardPage() {
 
       {/* 概览卡片 */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="总会话" value={stats.total_tasks} />
-        <StatCard label="成功" value={stats.done_tasks} color="text-green-400" />
-        <StatCard label="失败" value={stats.failed_tasks} color="text-red-400" />
+        <StatCard label="总会话" value={stats.total_sessions} />
+        <StatCard label="成功" value={stats.done_sessions} color="text-green-400" />
+        <StatCard label="失败" value={stats.failed_sessions} color="text-red-400" />
         <StatCard label="成功率" value={`${stats.success_rate}%`} color="text-blue-400" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 每日任务趋势 */}
+        {/* 每日会话趋势 */}
         <div className="bg-surface rounded-xl p-4">
           <h3 className="text-base font-semibold text-tx mb-3">近 7 天会话数</h3>
           <div className="flex items-end gap-2 h-32">
-            {stats.daily_tasks.map((d) => {
-              const max = Math.max(...stats.daily_tasks.map((x) => x.count), 1)
+            {stats.daily_sessions.map((d) => {
+              const max = Math.max(...stats.daily_sessions.map((x) => x.count), 1)
               const h = (d.count / max) * 100
               return (
                 <div key={d.day} className="flex-1 flex flex-col items-center gap-1">
@@ -170,12 +170,12 @@ export default function DashboardPage() {
       </div>
 
       {/* 各机器使用量 */}
-      {stats.machine_tasks.length > 0 && (
+      {stats.machine_sessions.length > 0 && (
         <div className="bg-surface rounded-xl p-4">
           <h3 className="text-base font-semibold text-tx mb-3">各机器会话分布</h3>
           <div className="space-y-2">
-            {stats.machine_tasks.map((m) => {
-              const max = Math.max(...stats.machine_tasks.map((x) => x.count), 1)
+            {stats.machine_sessions.map((m) => {
+              const max = Math.max(...stats.machine_sessions.map((x) => x.count), 1)
               return (
                 <div key={m.machine_id} className="flex items-center gap-3">
                   <span className="w-24 text-sm text-tx-sub truncate">{m.machine_id}</span>

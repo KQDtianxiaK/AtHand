@@ -483,10 +483,15 @@ export interface DailyWorkHours {
 }
 
 export interface StatsOverview {
+  total_sessions: number
+  done_sessions: number
+  failed_sessions: number
   total_tasks: number
   done_tasks: number
   failed_tasks: number
   success_rate: number
+  daily_sessions: { day: string; count: number }[]
+  machine_sessions: { machine_id: string; count: number }[]
   daily_tasks: { day: string; count: number }[]
   machine_tasks: { machine_id: string; count: number }[]
   total_work_hours: number
