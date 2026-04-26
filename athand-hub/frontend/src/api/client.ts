@@ -775,8 +775,8 @@ export function updateEmailContact(id: number, body: { name?: string; notes?: st
   return request<EmailContact>(`/api/email/contacts/${id}`, { method: 'PUT', body: JSON.stringify(body) })
 }
 
-export function deleteEmailContact(id: number) {
-  return request<{ ok: boolean }>(`/api/email/contacts/${id}`, { method: 'DELETE' })
+export async function deleteEmailContact(id: number): Promise<void> {
+  await request<{ ok: boolean }>(`/api/email/contacts/${id}`, { method: 'DELETE' })
 }
 
 // ---- News ----

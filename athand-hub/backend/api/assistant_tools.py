@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
-from models import ClockRecord, Email, EmailAccount, EmailFolder, Machine, Memo, Task, Todo, TodoList
+from models import ClockRecord, Email, EmailAccount, EmailFolder, Memo, Task, Todo, TodoList
 
 logger = logging.getLogger("assistant_tools")
 
@@ -490,52 +490,78 @@ def delete_memo(memo_id: int | None = None, title_keyword: str | None = None) ->
 
 async def send_kimi_task(prompt: str, machine_id: str | None = None,
                          work_dir: str | None = None) -> str:
-    from ws.hub import agent_hub
+    from fastapi import HTTPException
+
+    from api.ai_control_schemas import AiControlCreateSessionBody
+    from services.ai_control_bridge import bridge_service
 
     db: Session = SessionLocal()
     try:
         if not machine_id:
-            # 选第一台在线机器
-            machine = db.query(Machine).filter(Machine.is_online.is_(True)).first()
+            machines = bridge_service.list_machines(db)
+            machine = next((item for item in machines if item.daemon_reachable), None)
             if not machine:
-                return _ok({"ok": False, "error": "没有在线的机器"})
+                machine = next((item for item in machines if item.is_online), None)
+            if not machine:
+                return _ok({"ok": False, "error": "没有可用的 paseo 机器"})
             machine_id = machine.id
 
-        task = Task(
-            machine_id=machine_id,
-            prompt=prompt,
-            work_dir=work_dir,
-            mode="normal",
+        resolved_work_dir = (work_dir or "").strip()
+        if not resolved_work_dir:
+            latest_task = (
+                db.query(Task)
+                .filter(Task.machine_id == machine_id, Task.work_dir.isnot(None))
+                .order_by(Task.created_at.desc())
+                .first()
+            )
+            if latest_task and latest_task.work_dir:
+                resolved_work_dir = latest_task.work_dir.strip()
+
+        if not resolved_work_dir:
+            return _ok({"ok": False, "error": "请提供 work_dir，或先在该机器上创建过带工作目录的会话"})
+
+        session = bridge_service.create_session(
+            AiControlCreateSessionBody(
+                machine_id=machine_id,
+                provider="kimi",
+                cwd=resolved_work_dir,
+                initial_prompt=prompt,
+            ),
+            db,
         )
-        db.add(task)
-        db.commit()
-        db.refresh(task)
-
-        sent = await agent_hub.send_task(machine_id, {
-            "type": "kimi_task",
-            "task_id": task.id,
-            "prompt": prompt,
-            "work_dir": work_dir,
-            "mode": "normal",
-            "session_id": None,
+        return _ok({
+            "ok": True,
+            "agent_id": session.agent_id,
+            "machine_id": session.machine_id,
+            "provider": session.provider,
+            "cwd": session.cwd,
+            "status": session.status,
         })
-        if not sent:
-            task.status = "failed"
-            db.commit()
-            return _ok({"ok": False, "error": "目标机器不在线"})
-
-        return _ok({"ok": True, "task_id": task.id, "machine_id": machine_id})
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return _ok({"ok": False, "error": detail})
+    except Exception as exc:
+        logger.exception("send_kimi_task failed")
+        return _ok({"ok": False, "error": f"创建 Kimi 会话失败: {exc}"})
     finally:
         db.close()
 
 
 def list_machines() -> str:
+    from services.ai_control_bridge import bridge_service
+
     db: Session = SessionLocal()
     try:
-        machines = db.query(Machine).all()
+        machines = bridge_service.list_machines(db)
         return _ok([
-            {"id": m.id, "name": m.name, "is_online": m.is_online,
-             "machine_type": m.machine_type}
+            {
+                "id": m.id,
+                "name": m.name,
+                "is_online": m.is_online,
+                "machine_type": m.machine_type,
+                "daemon_reachable": m.daemon_reachable,
+                "runtime_kind": m.runtime_kind,
+            }
             for m in machines
         ])
     finally:
