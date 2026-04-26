@@ -203,6 +203,28 @@ class AiControlHistoryResponse(BaseModel):
     next_cursor: str | None = None
 
 
+class AiControlBackfillHistoryPreviewsBody(BaseModel):
+    machine_id: str
+    provider: str | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class AiControlBackfillHistoryPreviewResult(BaseModel):
+    agent_id: str
+    title: str | None = None
+    backfilled: bool = False
+    last_message_preview: str | None = None
+
+
+class AiControlBackfillHistoryPreviewsResponse(BaseModel):
+    machine_id: str
+    attempted: int = 0
+    backfilled: int = 0
+    skipped: int = 0
+    results: list[AiControlBackfillHistoryPreviewResult] = Field(default_factory=list)
+    history: AiControlHistoryResponse
+
+
 class AiControlPermissionBody(BaseModel):
     behavior: Literal["allow", "deny"]
     selected_action_id: str | None = None

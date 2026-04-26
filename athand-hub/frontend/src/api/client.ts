@@ -39,20 +39,6 @@ export async function login(password: string) {
   return data
 }
 
-// ---- Machines ----
-export interface Machine {
-  id: string
-  name: string
-  machine_type: string
-  os_info: string | null
-  is_online: boolean
-  last_heartbeat: string | null
-}
-
-export function getMachines() {
-  return request<Machine[]>('/api/agents/machines')
-}
-
 // ---- Tasks ----
 export interface Task {
   id: number
@@ -582,45 +568,6 @@ export function connectDashboardWS(onMessage: (data: any) => void): WebSocket {
     } catch {}
   }
   return ws
-}
-
-// ---- Kimi Local Sessions ----
-export interface KimiSession {
-  session_id: string
-  title: string
-  has_data: boolean
-  archived: boolean
-  mtime: number
-}
-
-export interface KimiWorkDir {
-  work_dir: string
-  dir_hash: string
-  sessions: KimiSession[]
-}
-
-export interface KimiSessionMessage {
-  role: string
-  content: string | null
-  tool_calls?: string | null
-  tool_call_id?: string | null
-  timestamp?: number | null
-}
-
-export function getKimiWorkDirs() {
-  return request<KimiWorkDir[]>('/api/kimi-sessions')
-}
-
-export function getKimiSessionMessages(dirHash: string, sessionId: string) {
-  return request<{ session_id: string; title: string; work_dir: string | null; messages: KimiSessionMessage[] }>(
-    `/api/kimi-sessions/${dirHash}/${sessionId}/messages`
-  )
-}
-
-export function resolveKimiSession(sessionId: string) {
-  return request<{ session_id: string; title: string; messages: KimiSessionMessage[] }>(
-    `/api/kimi-sessions/resolve/${sessionId}`
-  )
 }
 
 // ---- AI Assistant ----

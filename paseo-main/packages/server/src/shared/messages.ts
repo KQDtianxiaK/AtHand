@@ -647,6 +647,12 @@ export const ArchiveAgentRequestMessageSchema = z.object({
   requestId: z.string(),
 });
 
+export const BackfillAgentPreviewRequestMessageSchema = z.object({
+  type: z.literal("backfill_agent_preview_request"),
+  agentId: z.string(),
+  requestId: z.string(),
+});
+
 export const CloseItemsRequestMessageSchema = z.object({
   type: z.literal("close_items_request"),
   agentIds: z.array(z.string()).default([]),
@@ -1572,6 +1578,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   FetchAgentRequestMessageSchema,
   DeleteAgentRequestMessageSchema,
   ArchiveAgentRequestMessageSchema,
+  BackfillAgentPreviewRequestMessageSchema,
   CloseItemsRequestMessageSchema,
   UpdateAgentRequestMessageSchema,
   SetVoiceModeMessageSchema,
@@ -2272,6 +2279,17 @@ export const ArchiveWorkspaceResponseMessageSchema = z.object({
     requestId: z.string(),
     workspaceId: z.string(),
     archivedAt: z.string().nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const BackfillAgentPreviewResponseMessageSchema = z.object({
+  type: z.literal("backfill_agent_preview_response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    backfilled: z.boolean(),
+    lastMessage: z.string().nullable(),
     error: z.string().nullable(),
   }),
 });
@@ -3157,6 +3175,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ListAvailableEditorsResponseMessageSchema,
   OpenInEditorResponseMessageSchema,
   ArchiveWorkspaceResponseMessageSchema,
+  BackfillAgentPreviewResponseMessageSchema,
   FetchAgentResponseMessageSchema,
   FetchAgentTimelineResponseMessageSchema,
   CancelAgentResponseMessageSchema,

@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from api.ai_control_schemas import (
+    AiControlBackfillHistoryPreviewsBody,
+    AiControlBackfillHistoryPreviewsResponse,
     AiControlCreateSessionBody,
     AiControlHistoryResponse,
     AiControlMachineOut,
@@ -108,6 +110,14 @@ def get_ai_control_history(
         limit=limit,
         db=db,
     )
+
+
+@router.post("/history/backfill-previews", response_model=AiControlBackfillHistoryPreviewsResponse)
+def backfill_ai_control_history_previews(
+    body: AiControlBackfillHistoryPreviewsBody,
+    db: Session = Depends(get_db),
+):
+    return bridge_service.backfill_history_previews(body=body, db=db)
 
 
 @router.post("/permissions/{agent_id}/{request_id}", response_model=AiControlPermissionResponse)

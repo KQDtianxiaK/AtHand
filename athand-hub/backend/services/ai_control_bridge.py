@@ -22,6 +22,9 @@ except ImportError:
     WEBSOCKET_EXCEPTIONS = (OSError,)
 
 from api.ai_control_schemas import (
+    AiControlBackfillHistoryPreviewsBody,
+    AiControlBackfillHistoryPreviewResult,
+    AiControlBackfillHistoryPreviewsResponse,
     AiControlCapabilitiesOut,
     AiControlCreateSessionBody,
     AiControlHistoryItemOut,
@@ -463,6 +466,19 @@ class AiControlBridgeService:
         )
         return responses[0]
 
+    async def _backfill_agent_preview(self, daemon_url: str, *, agent_id: str) -> dict[str, Any]:
+        request_id = self._next_request_id("backfill-preview")
+        request = {
+            "type": "backfill_agent_preview_request",
+            "requestId": request_id,
+            "agentId": agent_id,
+        }
+        _, responses = await self._connect_and_exchange(
+            daemon_url,
+            [(request, "backfill_agent_preview_response")],
+        )
+        return responses[0]
+
     @staticmethod
     def _normalize_permission_response(body: AiControlPermissionBody) -> dict[str, Any]:
         response: dict[str, Any] = {"behavior": body.behavior}
@@ -866,6 +882,35 @@ class AiControlBridgeService:
             attention_reason=agent.get("attentionReason") if isinstance(agent.get("attentionReason"), str) else None,
             persistence_handle=self._persistence_handle_out(agent.get("persistence")),
         )
+
+    @staticmethod
+    def _history_entry_agent_id(entry: dict[str, Any]) -> str | None:
+        agent = entry.get("agent")
+        if not isinstance(agent, dict):
+            return None
+        agent_id = agent.get("id")
+        if not isinstance(agent_id, str) or not agent_id:
+            return None
+        return agent_id
+
+    def _closed_history_candidates(
+        self,
+        machine_id: str,
+        entries: list[dict[str, Any]],
+        *,
+        provider: str | None,
+    ) -> list[AiControlHistoryItemOut]:
+        candidates: list[AiControlHistoryItemOut] = []
+        for entry in entries:
+            item = self._history_item_out(machine_id, entry)
+            if item is None:
+                continue
+            if provider is not None and item.provider != provider:
+                continue
+            if item.status.strip().lower() != "closed":
+                continue
+            candidates.append(item)
+        return candidates
 
     def _machine_payload(
         self,
@@ -1297,6 +1342,90 @@ class AiControlBridgeService:
         if first_error is not None:
             raise first_error
         return AiControlHistoryResponse(items=[], next_cursor=None)
+
+    def backfill_history_previews(
+        self,
+        *,
+        body: AiControlBackfillHistoryPreviewsBody,
+        db: Session,
+    ) -> AiControlBackfillHistoryPreviewsResponse:
+        machine = db.query(Machine).filter(Machine.id == body.machine_id).first()
+        if not machine:
+            raise HTTPException(404, "机器不存在")
+
+        daemon_url = self._daemon_url_for_machine(machine.id)
+        if not daemon_url:
+            raise HTTPException(412, "该机器尚未配置 paseo daemon 地址")
+
+        try:
+            payload = self._run_async(
+                self._fetch_agent_history(
+                    daemon_url,
+                    status="closed",
+                    cursor=None,
+                    limit=body.limit,
+                )
+            )
+        except AiControlBridgeTimeoutError as exc:
+            raise HTTPException(504, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(412, str(exc)) from exc
+        except (AiControlBridgeTransportError, AiControlBridgeProtocolError) as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+        entries = [entry for entry in payload.get("entries", []) if isinstance(entry, dict)]
+        candidates = [
+            item
+            for item in self._closed_history_candidates(machine.id, entries, provider=body.provider)
+            if item.last_message_preview is None and item.persistence_handle is not None
+        ]
+
+        results: list[AiControlBackfillHistoryPreviewResult] = []
+        backfilled_count = 0
+        for item in candidates:
+            try:
+                payload = self._run_async(
+                    self._backfill_agent_preview(
+                        daemon_url,
+                        agent_id=item.agent_id,
+                    )
+                )
+            except AiControlBridgeTimeoutError as exc:
+                raise HTTPException(504, str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(412, str(exc)) from exc
+            except (AiControlBridgeTransportError, AiControlBridgeProtocolError) as exc:
+                raise HTTPException(502, str(exc)) from exc
+
+            preview = self._normalize_history_preview(payload.get("lastMessage"))
+            backfilled = bool(payload.get("backfilled", False)) and preview is not None
+            if backfilled:
+                backfilled_count += 1
+            results.append(
+                AiControlBackfillHistoryPreviewResult(
+                    agent_id=item.agent_id,
+                    title=item.title,
+                    backfilled=backfilled,
+                    last_message_preview=preview,
+                )
+            )
+
+        history = self.get_history(
+            machine_id=body.machine_id,
+            provider=body.provider,
+            status=None,
+            cursor=None,
+            limit=body.limit,
+            db=db,
+        )
+        return AiControlBackfillHistoryPreviewsResponse(
+            machine_id=body.machine_id,
+            attempted=len(candidates),
+            backfilled=backfilled_count,
+            skipped=max(len(self._closed_history_candidates(machine.id, entries, provider=body.provider)) - len(candidates), 0),
+            results=results,
+            history=history,
+        )
 
     def respond_permission(
         self,

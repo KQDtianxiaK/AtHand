@@ -173,7 +173,7 @@ function buildBoardCardFromSession(session: AiControlSession, timeline: AiContro
   }
 }
 
-export default function AiControlBridgePanel({ onOpenLegacy }: { onOpenLegacy: () => void }) {
+export default function AiControlBridgePanel() {
   const [machines, setMachines] = useState<AiControlMachine[]>([])
   const [providers, setProviders] = useState<AiControlProvider[]>([])
   const [history, setHistory] = useState<AiControlHistoryItem[]>([])
@@ -508,12 +508,6 @@ export default function AiControlBridgePanel({ onOpenLegacy }: { onOpenLegacy: (
                 <h2 className="text-lg font-bold">AI 管控</h2>
                 <p className="mt-1 text-xs text-tx-faint">会话看板版 bridge 面板，当前仍通过 REST 轮询接 paseo sidecar</p>
               </div>
-              <button
-                onClick={onOpenLegacy}
-                className="rounded-lg border border-bd px-3 py-1.5 text-xs text-tx-muted hover:border-bd-strong hover:text-tx-sub"
-              >
-                旧版页面
-              </button>
             </div>
 
             <div className="space-y-2">

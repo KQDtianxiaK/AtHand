@@ -894,8 +894,8 @@ export class AgentManager {
     );
     const closedAgent = this.prepareAgentForClosure(agent, "agent closed");
     await agent.session.close();
-    this.timelineStore.delete(agentId);
     await this.persistSnapshot(closedAgent);
+    this.timelineStore.delete(agentId);
     this.emitClosedAgent(closedAgent, { persist: false });
     this.logger.trace({ agentId }, "closeAgent: completed");
   }
@@ -1787,7 +1787,7 @@ export class AgentManager {
   }
 
   private async getLastAssistantMessageFromStores(agentId: string): Promise<string | null> {
-    const liveTimeline = this.timelineStore.getItems(agentId);
+    const liveTimeline = this.timelineStore.has(agentId) ? this.timelineStore.getItems(agentId) : [];
     const liveSegment = this.getLastAssistantMessageSegmentFromTimeline(liveTimeline);
     if (!this.durableTimelineStore) {
       return liveSegment?.text ?? null;
