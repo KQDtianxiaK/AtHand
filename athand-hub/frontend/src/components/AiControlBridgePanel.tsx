@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState, type MouseEvent } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 
 import {
   type AiControlHistoryItem,
@@ -18,6 +18,7 @@ import {
 
 const CONTROL_PANEL_COLLAPSED_STORAGE_KEY = 'athand.aiControl.controlPanelCollapsed'
 const HIDE_EMPTY_COLUMNS_STORAGE_KEY = 'athand.aiControl.hideEmptyColumns'
+const HIDDEN_BOARD_COLUMNS_STORAGE_KEY = 'athand.aiControl.hiddenBoardColumns'
 
 const TERMINAL_STATUSES = new Set(['done', 'failed', 'cancelled', 'canceled', 'completed', 'error', 'closed', 'archived'])
 const ERROR_STATUSES = new Set(['failed', 'error', 'crashed', 'timed_out', 'timeout'])
@@ -57,6 +58,7 @@ const BOARD_COLUMNS: Array<{ id: BoardColumnId; label: string; description: stri
   { id: 'done', label: '已完成', description: '本轮完成，可作为历史沉淀' },
   { id: 'error', label: '异常', description: '失败、超时或需要人工介入的会话' },
 ]
+const BOARD_COLUMN_IDS = new Set(BOARD_COLUMNS.map((column) => column.id))
 
 function normalizeStatus(value: string | null | undefined) {
   return (value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_')
@@ -170,6 +172,19 @@ function readStoredFlag(key: string, fallback = false) {
   }
 }
 
+function readStoredHiddenBoardColumns() {
+  if (typeof window === 'undefined') return [] as BoardColumnId[]
+  try {
+    const rawValue = window.localStorage.getItem(HIDDEN_BOARD_COLUMNS_STORAGE_KEY)
+    if (!rawValue) return [] as BoardColumnId[]
+    const parsed = JSON.parse(rawValue)
+    if (!Array.isArray(parsed)) return [] as BoardColumnId[]
+    return parsed.filter((value): value is BoardColumnId => typeof value === 'string' && BOARD_COLUMN_IDS.has(value as BoardColumnId))
+  } catch {
+    return [] as BoardColumnId[]
+  }
+}
+
 function buildBoardCardFromSession(session: AiControlSession, timeline: AiControlTimelineItem[]): AiControlHistoryItem {
   return {
     agent_id: session.agent_id,
@@ -188,6 +203,7 @@ function buildBoardCardFromSession(session: AiControlSession, timeline: AiContro
 }
 
 export default function AiControlBridgePanel() {
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const [machines, setMachines] = useState<AiControlMachine[]>([])
   const [providers, setProviders] = useState<AiControlProvider[]>([])
   const [history, setHistory] = useState<AiControlHistoryItem[]>([])
@@ -211,6 +227,7 @@ export default function AiControlBridgePanel() {
   const [boardQuery, setBoardQuery] = useState('')
   const [controlPanelCollapsed, setControlPanelCollapsed] = useState(() => readStoredFlag(CONTROL_PANEL_COLLAPSED_STORAGE_KEY))
   const [hideEmptyColumns, setHideEmptyColumns] = useState(() => readStoredFlag(HIDE_EMPTY_COLUMNS_STORAGE_KEY))
+  const [hiddenBoardColumnIds, setHiddenBoardColumnIds] = useState<BoardColumnId[]>(() => readStoredHiddenBoardColumns())
 
   const deferredBoardQuery = useDeferredValue(boardQuery)
 
@@ -271,11 +288,16 @@ export default function AiControlBridgePanel() {
     () => BOARD_COLUMNS.map((column) => ({ ...column, items: boardCards.filter((item) => item.board_status === column.id) })),
     [boardCards],
   )
+  const hiddenBoardColumnIdSet = useMemo(() => new Set(hiddenBoardColumnIds), [hiddenBoardColumnIds])
   const visibleBoardColumns = useMemo(
-    () => (hideEmptyColumns ? boardColumns.filter((column) => column.items.length > 0) : boardColumns),
-    [boardColumns, hideEmptyColumns],
+    () => boardColumns.filter((column) => !hiddenBoardColumnIdSet.has(column.id) && (!hideEmptyColumns || column.items.length > 0)),
+    [boardColumns, hiddenBoardColumnIdSet, hideEmptyColumns],
   )
-  const hiddenEmptyColumnCount = boardColumns.length - visibleBoardColumns.length
+  const autoHiddenEmptyColumnCount = useMemo(
+    () => (hideEmptyColumns ? boardColumns.filter((column) => !hiddenBoardColumnIdSet.has(column.id) && column.items.length === 0).length : 0),
+    [boardColumns, hiddenBoardColumnIdSet, hideEmptyColumns],
+  )
+  const manuallyHiddenColumnCount = hiddenBoardColumnIds.length
 
   const selectedCardSummary = useMemo(
     () => boardCards.find((item) => item.agent_id === selectedCardId) ?? null,
@@ -283,6 +305,7 @@ export default function AiControlBridgePanel() {
   )
 
   const boardHasItems = boardCards.length > 0
+  const boardHasVisibleColumns = visibleBoardColumns.length > 0
 
   useEffect(() => {
     try {
@@ -299,6 +322,35 @@ export default function AiControlBridgePanel() {
       // Ignore storage failures and keep the toggle local to the current render.
     }
   }, [hideEmptyColumns])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(HIDDEN_BOARD_COLUMNS_STORAGE_KEY, JSON.stringify(hiddenBoardColumnIds))
+    } catch {
+      // Ignore storage failures and keep the toggle local to the current render.
+    }
+  }, [hiddenBoardColumnIds])
+
+  const focusComposer = () => {
+    const focusInput = () => {
+      composerRef.current?.focus()
+      composerRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+
+    if (controlPanelCollapsed) {
+      setControlPanelCollapsed(false)
+      window.setTimeout(focusInput, 0)
+      return
+    }
+
+    focusInput()
+  }
+
+  const toggleBoardColumnVisibility = (columnId: BoardColumnId) => {
+    setHiddenBoardColumnIds((current) => (
+      current.includes(columnId) ? current.filter((value) => value !== columnId) : [...current, columnId]
+    ))
+  }
 
   const refreshProviders = async (machineId = selectedMachine, nextCwd = cwd) => {
     if (!machineId) return
@@ -711,7 +763,13 @@ export default function AiControlBridgePanel() {
                       </button>
                     )}
                   </div>
+                  <div className={`rounded-lg border px-3 py-2 text-xs leading-6 ${activeSession ? 'border-blue-700/40 bg-blue-900/20 text-blue-200' : 'border-bd bg-raised/20 text-tx-faint'}`}>
+                    {activeSession
+                      ? `当前输入会直接发送到“${activeSession.title || activeSession.agent_id}”。提交后卡片会跟随 provider 状态自动移动，通常会先进入“执行中”，结束后再回到“待继续”或“已完成”。`
+                      : '想继续一个已有会话时，先点击中间看板里的卡片；未选中会话时，这里的输入会创建新会话。'}
+                  </div>
                   <textarea
+                    ref={composerRef}
                     value={composer}
                     onChange={(event) => setComposer(event.target.value)}
                     rows={4}
@@ -745,19 +803,29 @@ export default function AiControlBridgePanel() {
                   <h3 className="text-sm font-medium text-tx-sub">看板快照</h3>
                   <p className="mt-1 text-xs text-tx-faint">当前机器的会话卡片来自 bridge history，选中后在右侧查看完整 timeline。</p>
                 </div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  {visibleBoardColumns.map((column) => (
-                    <div key={column.id} className={`rounded-xl border px-3 py-2 ${columnTone(column.id)}`}>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-tx-sub">{column.label}</span>
-                        <span className="text-xs text-tx-faint">{column.items.length}</span>
+                {boardHasVisibleColumns ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    {visibleBoardColumns.map((column) => (
+                      <div key={column.id} className={`rounded-xl border px-3 py-2 ${columnTone(column.id)}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-tx-sub">{column.label}</span>
+                          <span className="text-xs text-tx-faint">{column.items.length}</span>
+                        </div>
+                        <div className="mt-1 text-[11px] leading-5 text-tx-faint">{column.description}</div>
                       </div>
-                      <div className="mt-1 text-[11px] leading-5 text-tx-faint">{column.description}</div>
-                    </div>
-                  ))}
-                </div>
-                {hideEmptyColumns && hiddenEmptyColumnCount > 0 && (
-                  <div className="mt-2 text-[11px] text-tx-faint">已隐藏 {hiddenEmptyColumnCount} 个空列。</div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-xl border border-dashed border-bd px-4 py-5 text-center text-xs leading-6 text-tx-faint">
+                    当前没有可见列，可在中间看板里重新显示列。
+                  </div>
+                )}
+                {(manuallyHiddenColumnCount > 0 || autoHiddenEmptyColumnCount > 0) && (
+                  <div className="mt-2 text-[11px] text-tx-faint">
+                    {manuallyHiddenColumnCount > 0 && `手动隐藏 ${manuallyHiddenColumnCount} 列`}
+                    {manuallyHiddenColumnCount > 0 && autoHiddenEmptyColumnCount > 0 && ' · '}
+                    {autoHiddenEmptyColumnCount > 0 && `空列自动隐藏 ${autoHiddenEmptyColumnCount} 列`}
+                  </div>
                 )}
                 <div className="mt-3 rounded-xl border border-bd bg-raised/20 px-3 py-2 text-xs text-tx-faint">
                   {historyLoading ? '正在刷新当前机器的看板历史...' : `当前筛出 ${boardCards.length} 张会话卡片`}
@@ -774,36 +842,54 @@ export default function AiControlBridgePanel() {
                 <h3 className="text-sm font-medium text-tx-sub">会话看板</h3>
                 <p className="mt-1 text-xs text-tx-faint">按状态分列浏览当前机器会话，点击卡片即可在右侧打开完整详情。</p>
               </div>
-              <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end lg:w-auto">
-                <div className="relative flex-1 sm:min-w-[240px] lg:w-[280px] lg:flex-none">
-                  <input
-                    value={boardQuery}
-                    onChange={(event) => setBoardQuery(event.target.value)}
-                    placeholder="搜索标题、provider、路径或摘要"
-                    className="w-full rounded-lg border border-bd-strong bg-raised px-3 py-2 pr-12 text-sm text-tx"
-                  />
-                  {boardQuery && (
-                    <button
-                      onClick={() => setBoardQuery('')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-1.5 py-1 text-xs text-tx-muted hover:text-tx-sub"
-                    >
-                      清空
-                    </button>
-                  )}
+              <div className="flex w-full flex-col gap-2 lg:w-auto">
+                <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end lg:w-auto">
+                  <div className="relative flex-1 sm:min-w-[240px] lg:w-[280px] lg:flex-none">
+                    <input
+                      value={boardQuery}
+                      onChange={(event) => setBoardQuery(event.target.value)}
+                      placeholder="搜索标题、provider、路径或摘要"
+                      className="w-full rounded-lg border border-bd-strong bg-raised px-3 py-2 pr-12 text-sm text-tx"
+                    />
+                    {boardQuery && (
+                      <button
+                        onClick={() => setBoardQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-1.5 py-1 text-xs text-tx-muted hover:text-tx-sub"
+                      >
+                        清空
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => void handleRefreshBoard()}
+                    disabled={!selectedMachine || historyLoading}
+                    className="rounded-lg border border-bd px-3 py-2 text-xs text-tx-muted hover:text-tx-sub disabled:opacity-50"
+                  >
+                    {historyLoading ? '刷新中...' : '刷新看板'}
+                  </button>
+                  <button
+                    onClick={() => setHideEmptyColumns((current) => !current)}
+                    className={`rounded-lg border px-3 py-2 text-xs ${hideEmptyColumns ? 'border-blue-500/40 bg-blue-500/10 text-blue-300' : 'border-bd text-tx-muted hover:text-tx-sub'}`}
+                  >
+                    {hideEmptyColumns ? '显示空列' : '隐藏空列'}
+                  </button>
                 </div>
-                <button
-                  onClick={() => void handleRefreshBoard()}
-                  disabled={!selectedMachine || historyLoading}
-                  className="rounded-lg border border-bd px-3 py-2 text-xs text-tx-muted hover:text-tx-sub disabled:opacity-50"
-                >
-                  {historyLoading ? '刷新中...' : '刷新看板'}
-                </button>
-                <button
-                  onClick={() => setHideEmptyColumns((current) => !current)}
-                  className={`rounded-lg border px-3 py-2 text-xs ${hideEmptyColumns ? 'border-blue-500/40 bg-blue-500/10 text-blue-300' : 'border-bd text-tx-muted hover:text-tx-sub'}`}
-                >
-                  {hideEmptyColumns ? '显示空列' : '隐藏空列'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-tx-faint">
+                  <span className="mr-1">列显示：</span>
+                  {boardColumns.map((column) => {
+                    const hidden = hiddenBoardColumnIdSet.has(column.id)
+                    return (
+                      <button
+                        key={column.id}
+                        onClick={() => toggleBoardColumnVisibility(column.id)}
+                        className={`rounded-full border px-2.5 py-1 transition ${hidden ? 'border-bd bg-page/40 text-tx-faint opacity-70' : 'border-blue-500/40 bg-blue-500/10 text-blue-200 hover:text-blue-100'}`}
+                        title={hidden ? `显示 ${column.label}` : `隐藏 ${column.label}`}
+                      >
+                        {column.label} {column.items.length}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
             </div>
           </div>
@@ -819,7 +905,13 @@ export default function AiControlBridgePanel() {
               </div>
             )}
 
-            {!bootstrapping && boardHasItems && (
+            {!bootstrapping && boardHasItems && !boardHasVisibleColumns && (
+              <div className="flex h-full items-center justify-center px-6 text-center text-sm text-tx-faint">
+                当前所有列都被隐藏了。请使用上方的列显示开关重新打开至少一列。
+              </div>
+            )}
+
+            {!bootstrapping && boardHasItems && boardHasVisibleColumns && (
               <div className="flex h-full min-w-max gap-4 p-4">
                 {visibleBoardColumns.map((column) => (
                   <section key={column.id} className="flex h-full w-[320px] shrink-0 flex-col overflow-hidden rounded-2xl border border-bd bg-raised/20">
@@ -970,6 +1062,18 @@ export default function AiControlBridgePanel() {
           </div>
 
           <div className="flex-1 space-y-3 overflow-y-auto overflow-x-hidden p-4 text-sm">
+            {activeSession && (
+              <div className="rounded-xl border border-blue-700/40 bg-blue-900/10 px-4 py-3 text-xs leading-6 text-blue-200">
+                <div>当前详情页对应的就是活动会话。继续对话时，点击左侧输入框发送；如果左栏已收起，可以先展开再续聊。</div>
+                <button
+                  onClick={focusComposer}
+                  className="mt-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-200 hover:text-blue-100"
+                >
+                  {controlPanelCollapsed ? '展开并继续对话' : '聚焦输入框继续对话'}
+                </button>
+              </div>
+            )}
+
             {!activeSession && !sessionLoading && (
               <p className="mt-8 text-center text-tx-faint">中间看板负责切换会话，右侧继续承担完整 timeline 与续聊操作。</p>
             )}
