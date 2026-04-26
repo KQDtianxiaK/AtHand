@@ -16,9 +16,11 @@ const navItems = [
 interface Props {
   open: boolean
   onClose: () => void
+  collapsed: boolean
+  onToggleCollapsed: () => void
 }
 
-export default function Sidebar({ open, onClose }: Props) {
+export default function Sidebar({ open, onClose, collapsed, onToggleCollapsed }: Props) {
   const { theme, toggle } = useTheme()
   const location = useLocation()
   const [hasUnreadDigest, setHasUnreadDigest] = useState(false)
@@ -41,12 +43,20 @@ export default function Sidebar({ open, onClose }: Props) {
         <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={onClose} />
       )}
       <aside
-        className={`fixed lg:static inset-y-0 left-0 z-50 w-56 bg-surface border-r border-bd transform transition-transform lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 w-56 border-r border-bd bg-surface transform transition-all duration-200 lg:static lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
-        }`}
+        } ${collapsed ? 'lg:w-0 lg:min-w-0 lg:overflow-hidden lg:border-r-0' : 'lg:w-56'}`}
       >
         <div className="p-4 border-b border-bd">
-          <h1 className="text-xl font-bold text-blue-400">AtHand Hub</h1>
+          <div className="flex items-center justify-between gap-2">
+            <h1 className="text-xl font-bold text-blue-400">AtHand Hub</h1>
+            <button
+              onClick={onToggleCollapsed}
+              className="hidden rounded-lg border border-bd px-2 py-1 text-xs text-tx-muted hover:text-tx-sub lg:inline-flex"
+            >
+              收起
+            </button>
+          </div>
         </div>
         <nav className="p-2 space-y-1 flex-1">
           {navItems.map((item) => (

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import AssistantPanel from './components/AssistantPanel'
 import Sidebar from './components/Sidebar'
@@ -12,16 +12,51 @@ import TodosPage from './pages/TodosPage'
 import EmailPage from './pages/EmailPage'
 import NewsPage from './pages/NewsPage'
 
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'athand.sidebar.collapsed'
+
+function readStoredFlag(key: string, fallback = false) {
+  if (typeof window === 'undefined') return fallback
+  try {
+    const value = window.localStorage.getItem(key)
+    if (value == null) return fallback
+    return value === '1'
+  } catch {
+    return fallback
+  }
+}
+
 function ProtectedLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStoredFlag(SIDEBAR_COLLAPSED_STORAGE_KEY))
   const token = localStorage.getItem('token')
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, sidebarCollapsed ? '1' : '0')
+    } catch {
+      // Ignore storage failures and keep the toggle local to the current render.
+    }
+  }, [sidebarCollapsed])
 
   if (!token) return <Navigate to="/login" replace />
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-      <div className="flex-1 flex flex-col min-w-0">
+      <Sidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
+      />
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        {sidebarCollapsed && (
+          <button
+            onClick={() => setSidebarCollapsed(false)}
+            className="fixed left-3 top-3 z-30 hidden rounded-lg border border-bd bg-surface/95 px-3 py-2 text-xs text-tx-sub shadow-lg backdrop-blur hover:text-tx lg:inline-flex"
+          >
+            展开 AtHand Hub 列表
+          </button>
+        )}
         {/* 顶栏 */}
         <header className="h-12 flex items-center px-4 border-b border-bd lg:hidden">
           <button

@@ -16,6 +16,9 @@ import {
   sendAiControlMessage,
 } from '../api/client'
 
+const CONTROL_PANEL_COLLAPSED_STORAGE_KEY = 'athand.aiControl.controlPanelCollapsed'
+const HIDE_EMPTY_COLUMNS_STORAGE_KEY = 'athand.aiControl.hideEmptyColumns'
+
 const TERMINAL_STATUSES = new Set(['done', 'failed', 'cancelled', 'canceled', 'completed', 'error', 'closed', 'archived'])
 const ERROR_STATUSES = new Set(['failed', 'error', 'crashed', 'timed_out', 'timeout'])
 const DONE_STATUSES = new Set(['done', 'completed', 'cancelled', 'canceled', 'finished', 'stopped', 'closed', 'archived'])
@@ -156,6 +159,17 @@ function deriveBoardStatus(status: string, attention: boolean, attentionReason: 
   return 'idle'
 }
 
+function readStoredFlag(key: string, fallback = false) {
+  if (typeof window === 'undefined') return fallback
+  try {
+    const value = window.localStorage.getItem(key)
+    if (value == null) return fallback
+    return value === '1'
+  } catch {
+    return fallback
+  }
+}
+
 function buildBoardCardFromSession(session: AiControlSession, timeline: AiControlTimelineItem[]): AiControlHistoryItem {
   return {
     agent_id: session.agent_id,
@@ -195,6 +209,8 @@ export default function AiControlBridgePanel() {
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedAgentId, setSelectedAgentId] = useState('')
   const [boardQuery, setBoardQuery] = useState('')
+  const [controlPanelCollapsed, setControlPanelCollapsed] = useState(() => readStoredFlag(CONTROL_PANEL_COLLAPSED_STORAGE_KEY))
+  const [hideEmptyColumns, setHideEmptyColumns] = useState(() => readStoredFlag(HIDE_EMPTY_COLUMNS_STORAGE_KEY))
 
   const deferredBoardQuery = useDeferredValue(boardQuery)
 
@@ -255,13 +271,34 @@ export default function AiControlBridgePanel() {
     () => BOARD_COLUMNS.map((column) => ({ ...column, items: boardCards.filter((item) => item.board_status === column.id) })),
     [boardCards],
   )
+  const visibleBoardColumns = useMemo(
+    () => (hideEmptyColumns ? boardColumns.filter((column) => column.items.length > 0) : boardColumns),
+    [boardColumns, hideEmptyColumns],
+  )
+  const hiddenEmptyColumnCount = boardColumns.length - visibleBoardColumns.length
 
   const selectedCardSummary = useMemo(
     () => boardCards.find((item) => item.agent_id === selectedCardId) ?? null,
     [boardCards, selectedCardId],
   )
 
-  const boardHasItems = boardColumns.some((column) => column.items.length > 0)
+  const boardHasItems = boardCards.length > 0
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CONTROL_PANEL_COLLAPSED_STORAGE_KEY, controlPanelCollapsed ? '1' : '0')
+    } catch {
+      // Ignore storage failures and keep the toggle local to the current render.
+    }
+  }, [controlPanelCollapsed])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(HIDE_EMPTY_COLUMNS_STORAGE_KEY, hideEmptyColumns ? '1' : '0')
+    } catch {
+      // Ignore storage failures and keep the toggle local to the current render.
+    }
+  }, [hideEmptyColumns])
 
   const refreshProviders = async (machineId = selectedMachine, nextCwd = cwd) => {
     if (!machineId) return
@@ -501,193 +538,233 @@ export default function AiControlBridgePanel() {
   return (
     <div className="h-full min-h-0">
       <div className="flex h-full min-h-0 flex-col xl:flex-row">
-        <aside className="flex w-full flex-col border-b border-bd xl:w-[360px] xl:border-b-0 xl:border-r">
-          <div className="space-y-4 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-bold">AI 管控</h2>
-                <p className="mt-1 text-xs text-tx-faint">会话看板版 bridge 面板，当前仍通过 REST 轮询接 paseo sidecar</p>
+        <aside className={`flex w-full flex-col border-b border-bd transition-all duration-200 xl:border-b-0 xl:border-r ${controlPanelCollapsed ? 'xl:w-[80px]' : 'xl:w-[360px]'}`}>
+          {controlPanelCollapsed ? (
+            <div className="flex w-full items-center justify-between gap-3 px-4 py-3 xl:h-full xl:flex-col xl:items-stretch xl:justify-start xl:px-3 xl:py-4">
+              <div className="min-w-0 xl:text-center">
+                <h2 className="text-sm font-bold text-tx-sub">AI 管控</h2>
+                <p className="mt-1 text-xs text-tx-faint xl:hidden">已收起，展开后可切换机器和创建会话。</p>
               </div>
-            </div>
 
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <label className="text-xs text-tx-muted">机器</label>
-                {selectedMachineInfo && (
-                  <span className={`rounded-full border px-2 py-0.5 text-[11px] ${selectedMachineInfo.daemon_reachable ? 'border-green-700/40 bg-green-900/40 text-green-300' : 'border-red-700/40 bg-red-900/40 text-red-300'}`}>
-                    {selectedMachineInfo.daemon_reachable ? 'daemon 已连通' : 'daemon 未连通'}
-                  </span>
-                )}
-              </div>
-              <select
-                value={selectedMachine}
-                onChange={(event) => setSelectedMachine(event.target.value)}
-                className="w-full rounded-lg border border-bd-strong bg-raised px-3 py-2 text-tx"
-                disabled={bootstrapping || machines.length === 0}
-              >
-                {machines.map((machine) => (
-                  <option key={machine.id} value={machine.id}>
-                    {machine.daemon_reachable ? '🟢' : '🔴'} {machine.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-xs text-tx-muted">工作目录</label>
-              <div className="flex gap-2">
-                <input
-                  value={cwd}
-                  onChange={(event) => setCwd(event.target.value)}
-                  placeholder="~/projects/myapp"
-                  className="flex-1 rounded-lg border border-bd-strong bg-raised px-3 py-2 text-sm text-tx"
-                />
-                <button
-                  onClick={() => void refreshProviders()}
-                  disabled={!selectedMachine || providerLoading}
-                  className="rounded-lg border border-bd px-3 py-2 text-xs text-tx-muted hover:text-tx-sub disabled:opacity-50"
-                >
-                  刷新
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
-              <div className="space-y-1">
-                <label className="text-xs text-tx-muted">Provider</label>
-                <select
-                  value={selectedProvider}
-                  onChange={(event) => setSelectedProvider(event.target.value)}
-                  className="w-full rounded-lg border border-bd-strong bg-raised px-3 py-2 text-sm text-tx"
-                  disabled={providerLoading || providers.length === 0}
-                >
-                  {providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-tx-muted">Mode</label>
-                <select
-                  value={selectedModeId}
-                  onChange={(event) => setSelectedModeId(event.target.value)}
-                  className="w-full rounded-lg border border-bd-strong bg-raised px-3 py-2 text-sm text-tx"
-                  disabled={!selectedProviderInfo || selectedProviderInfo.modes.length === 0}
-                >
-                  {selectedProviderInfo?.modes.map((mode) => (
-                    <option key={mode.id} value={mode.id}>
-                      {mode.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-tx-muted">Model</label>
-                <select
-                  value={selectedModel}
-                  onChange={(event) => setSelectedModel(event.target.value)}
-                  className="w-full rounded-lg border border-bd-strong bg-raised px-3 py-2 text-sm text-tx"
-                  disabled={!selectedProviderInfo || selectedProviderInfo.models.length === 0}
-                >
-                  {selectedProviderInfo?.models.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {selectedProviderInfo && (
-              <div className="space-y-1 rounded-lg border border-bd bg-raised/30 px-3 py-2 text-xs text-tx-faint">
-                <div className="flex items-center justify-between gap-2">
-                  <span>{selectedProviderInfo.label}</span>
-                  <span className={`rounded-full border px-2 py-0.5 ${selectedProviderInfo.status === 'ready' ? 'border-green-700/40 bg-green-900/40 text-green-300' : 'border-yellow-700/40 bg-yellow-900/40 text-yellow-300'}`}>
-                    {selectedProviderInfo.status}
-                  </span>
-                </div>
-                {selectedProviderInfo.fetched_at && <div>刷新时间：{formatTimeLabel(selectedProviderInfo.fetched_at)}</div>}
-                {selectedProviderInfo.error && <div className="text-red-300">{selectedProviderInfo.error}</div>}
-                {selectedProviderInfo.features.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {selectedProviderInfo.features.slice(0, 6).map((feature) => (
-                      <span key={feature.id} className="rounded border border-bd/60 bg-page px-1.5 py-0.5 text-tx-faint">
-                        {feature.label}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2 text-xs text-tx-muted">
-                <span>{activeSession ? '继续当前会话' : '创建新会话'}</span>
-                {activeSession && (
-                  <button
-                    onClick={() => {
-                      setActiveSession(null)
-                      setTimeline([])
-                      setSelectedAgentId('')
-                      setNotice('已切换到新会话模式')
-                    }}
-                    className="rounded-lg border border-bd px-2 py-1 text-xs text-tx-muted hover:border-bd-strong hover:text-tx-sub"
-                  >
-                    新会话
-                  </button>
-                )}
-              </div>
-              <textarea
-                value={composer}
-                onChange={(event) => setComposer(event.target.value)}
-                rows={4}
-                placeholder={activeSession ? '继续发送消息...' : '输入首条消息，创建新的 agent 会话...'}
-                className="w-full resize-none rounded-lg border border-bd-strong bg-raised px-3 py-2 text-tx"
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                    event.preventDefault()
-                    void handleSubmit()
-                  }
-                }}
-              />
               <button
-                onClick={() => void handleSubmit()}
-                disabled={submitting || !composer.trim()}
-                className="w-full rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
+                onClick={() => setControlPanelCollapsed(false)}
+                className="rounded-lg border border-bd px-3 py-2 text-xs text-tx-muted hover:text-tx-sub"
               >
-                {submitting ? '提交中...' : activeSession ? '发送消息' : '创建会话'}
+                展开
               </button>
-            </div>
 
-            {(errorMessage || notice) && (
-              <div className={`rounded-lg border px-3 py-2 text-xs ${errorMessage ? 'border-red-700/40 bg-red-900/20 text-red-300' : 'border-blue-700/40 bg-blue-900/20 text-blue-300'}`}>
-                {errorMessage ?? notice}
-              </div>
-            )}
-          </div>
-
-          <div className="border-t border-bd px-4 py-4">
-            <div>
-              <h3 className="text-sm font-medium text-tx-sub">看板快照</h3>
-              <p className="mt-1 text-xs text-tx-faint">当前机器的会话卡片来自 bridge history，选中后在右侧查看完整 timeline。</p>
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {boardColumns.map((column) => (
-                <div key={column.id} className={`rounded-xl border px-3 py-2 ${columnTone(column.id)}`}>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium text-tx-sub">{column.label}</span>
-                    <span className="text-xs text-tx-faint">{column.items.length}</span>
+              <div className="hidden xl:flex xl:flex-col xl:gap-3 xl:pt-4">
+                <div className="rounded-2xl border border-bd bg-raised/30 px-2 py-3 text-center">
+                  <div className="text-[11px] text-tx-faint">机器</div>
+                  <div className="mt-1 truncate text-sm text-tx-sub" title={selectedMachineInfo?.name ?? ''}>
+                    {selectedMachineInfo?.name ?? '未选'}
                   </div>
-                  <div className="mt-1 text-[11px] leading-5 text-tx-faint">{column.description}</div>
                 </div>
-              ))}
+                <div className="rounded-2xl border border-bd bg-raised/30 px-2 py-3 text-center">
+                  <div className="text-[11px] text-tx-faint">会话</div>
+                  <div className="mt-1 text-lg font-semibold text-tx-sub">{boardCards.length}</div>
+                </div>
+              </div>
             </div>
-            <div className="mt-3 rounded-xl border border-bd bg-raised/20 px-3 py-2 text-xs text-tx-faint">
-              {historyLoading ? '正在刷新当前机器的看板历史...' : `当前筛出 ${boardCards.length} 张会话卡片`}
-            </div>
-          </div>
+          ) : (
+            <>
+              <div className="space-y-4 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-bold">AI 管控</h2>
+                    <p className="mt-1 text-xs text-tx-faint">会话看板版 bridge 面板，当前仍通过 REST 轮询接 paseo sidecar</p>
+                  </div>
+                  <button
+                    onClick={() => setControlPanelCollapsed(true)}
+                    className="rounded-lg border border-bd px-3 py-2 text-xs text-tx-muted hover:text-tx-sub"
+                  >
+                    收起
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs text-tx-muted">机器</label>
+                    {selectedMachineInfo && (
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${selectedMachineInfo.daemon_reachable ? 'border-green-700/40 bg-green-900/40 text-green-300' : 'border-red-700/40 bg-red-900/40 text-red-300'}`}>
+                        {selectedMachineInfo.daemon_reachable ? 'daemon 已连通' : 'daemon 未连通'}
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    value={selectedMachine}
+                    onChange={(event) => setSelectedMachine(event.target.value)}
+                    className="w-full rounded-lg border border-bd-strong bg-raised px-3 py-2 text-tx"
+                    disabled={bootstrapping || machines.length === 0}
+                  >
+                    {machines.map((machine) => (
+                      <option key={machine.id} value={machine.id}>
+                        {machine.daemon_reachable ? '🟢' : '🔴'} {machine.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs text-tx-muted">工作目录</label>
+                  <div className="flex gap-2">
+                    <input
+                      value={cwd}
+                      onChange={(event) => setCwd(event.target.value)}
+                      placeholder="~/projects/myapp"
+                      className="flex-1 rounded-lg border border-bd-strong bg-raised px-3 py-2 text-sm text-tx"
+                    />
+                    <button
+                      onClick={() => void refreshProviders()}
+                      disabled={!selectedMachine || providerLoading}
+                      className="rounded-lg border border-bd px-3 py-2 text-xs text-tx-muted hover:text-tx-sub disabled:opacity-50"
+                    >
+                      刷新
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-tx-muted">Provider</label>
+                    <select
+                      value={selectedProvider}
+                      onChange={(event) => setSelectedProvider(event.target.value)}
+                      className="w-full rounded-lg border border-bd-strong bg-raised px-3 py-2 text-sm text-tx"
+                      disabled={providerLoading || providers.length === 0}
+                    >
+                      {providers.map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-tx-muted">Mode</label>
+                    <select
+                      value={selectedModeId}
+                      onChange={(event) => setSelectedModeId(event.target.value)}
+                      className="w-full rounded-lg border border-bd-strong bg-raised px-3 py-2 text-sm text-tx"
+                      disabled={!selectedProviderInfo || selectedProviderInfo.modes.length === 0}
+                    >
+                      {selectedProviderInfo?.modes.map((mode) => (
+                        <option key={mode.id} value={mode.id}>
+                          {mode.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-tx-muted">Model</label>
+                    <select
+                      value={selectedModel}
+                      onChange={(event) => setSelectedModel(event.target.value)}
+                      className="w-full rounded-lg border border-bd-strong bg-raised px-3 py-2 text-sm text-tx"
+                      disabled={!selectedProviderInfo || selectedProviderInfo.models.length === 0}
+                    >
+                      {selectedProviderInfo?.models.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {selectedProviderInfo && (
+                  <div className="space-y-1 rounded-lg border border-bd bg-raised/30 px-3 py-2 text-xs text-tx-faint">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>{selectedProviderInfo.label}</span>
+                      <span className={`rounded-full border px-2 py-0.5 ${selectedProviderInfo.status === 'ready' ? 'border-green-700/40 bg-green-900/40 text-green-300' : 'border-yellow-700/40 bg-yellow-900/40 text-yellow-300'}`}>
+                        {selectedProviderInfo.status}
+                      </span>
+                    </div>
+                    {selectedProviderInfo.fetched_at && <div>刷新时间：{formatTimeLabel(selectedProviderInfo.fetched_at)}</div>}
+                    {selectedProviderInfo.error && <div className="text-red-300">{selectedProviderInfo.error}</div>}
+                    {selectedProviderInfo.features.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {selectedProviderInfo.features.slice(0, 6).map((feature) => (
+                          <span key={feature.id} className="rounded border border-bd/60 bg-page px-1.5 py-0.5 text-tx-faint">
+                            {feature.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2 text-xs text-tx-muted">
+                    <span>{activeSession ? '继续当前会话' : '创建新会话'}</span>
+                    {activeSession && (
+                      <button
+                        onClick={() => {
+                          setActiveSession(null)
+                          setTimeline([])
+                          setSelectedAgentId('')
+                          setNotice('已切换到新会话模式')
+                        }}
+                        className="rounded-lg border border-bd px-2 py-1 text-xs text-tx-muted hover:border-bd-strong hover:text-tx-sub"
+                      >
+                        新会话
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={composer}
+                    onChange={(event) => setComposer(event.target.value)}
+                    rows={4}
+                    placeholder={activeSession ? '继续发送消息...' : '输入首条消息，创建新的 agent 会话...'}
+                    className="w-full resize-none rounded-lg border border-bd-strong bg-raised px-3 py-2 text-tx"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                        event.preventDefault()
+                        void handleSubmit()
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => void handleSubmit()}
+                    disabled={submitting || !composer.trim()}
+                    className="w-full rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {submitting ? '提交中...' : activeSession ? '发送消息' : '创建会话'}
+                  </button>
+                </div>
+
+                {(errorMessage || notice) && (
+                  <div className={`rounded-lg border px-3 py-2 text-xs ${errorMessage ? 'border-red-700/40 bg-red-900/20 text-red-300' : 'border-blue-700/40 bg-blue-900/20 text-blue-300'}`}>
+                    {errorMessage ?? notice}
+                  </div>
+                )}
+              </div>
+
+              <div className="border-t border-bd px-4 py-4">
+                <div>
+                  <h3 className="text-sm font-medium text-tx-sub">看板快照</h3>
+                  <p className="mt-1 text-xs text-tx-faint">当前机器的会话卡片来自 bridge history，选中后在右侧查看完整 timeline。</p>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {visibleBoardColumns.map((column) => (
+                    <div key={column.id} className={`rounded-xl border px-3 py-2 ${columnTone(column.id)}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-tx-sub">{column.label}</span>
+                        <span className="text-xs text-tx-faint">{column.items.length}</span>
+                      </div>
+                      <div className="mt-1 text-[11px] leading-5 text-tx-faint">{column.description}</div>
+                    </div>
+                  ))}
+                </div>
+                {hideEmptyColumns && hiddenEmptyColumnCount > 0 && (
+                  <div className="mt-2 text-[11px] text-tx-faint">已隐藏 {hiddenEmptyColumnCount} 个空列。</div>
+                )}
+                <div className="mt-3 rounded-xl border border-bd bg-raised/20 px-3 py-2 text-xs text-tx-faint">
+                  {historyLoading ? '正在刷新当前机器的看板历史...' : `当前筛出 ${boardCards.length} 张会话卡片`}
+                </div>
+              </div>
+            </>
+          )}
         </aside>
 
         <section className="flex min-h-0 flex-1 flex-col border-b border-bd xl:border-b-0 xl:border-r">
@@ -721,6 +798,12 @@ export default function AiControlBridgePanel() {
                 >
                   {historyLoading ? '刷新中...' : '刷新看板'}
                 </button>
+                <button
+                  onClick={() => setHideEmptyColumns((current) => !current)}
+                  className={`rounded-lg border px-3 py-2 text-xs ${hideEmptyColumns ? 'border-blue-500/40 bg-blue-500/10 text-blue-300' : 'border-bd text-tx-muted hover:text-tx-sub'}`}
+                >
+                  {hideEmptyColumns ? '显示空列' : '隐藏空列'}
+                </button>
               </div>
             </div>
           </div>
@@ -738,7 +821,7 @@ export default function AiControlBridgePanel() {
 
             {!bootstrapping && boardHasItems && (
               <div className="flex h-full min-w-max gap-4 p-4">
-                {boardColumns.map((column) => (
+                {visibleBoardColumns.map((column) => (
                   <section key={column.id} className="flex h-full w-[320px] shrink-0 flex-col overflow-hidden rounded-2xl border border-bd bg-raised/20">
                     <div className={`border-b px-4 py-3 ${columnTone(column.id)}`}>
                       <div className="flex items-center justify-between gap-2">
