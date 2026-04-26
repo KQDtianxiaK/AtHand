@@ -148,18 +148,6 @@ def build_stats_overview(days: int, db: Session):
             {"machine_id": machine_id, "count": count}
             for machine_id, count in sorted(machine_session_counts.items())
         ],
-        # Temporary aliases for compatibility with older callers.
-        "total_tasks": total_sessions,
-        "done_tasks": done_sessions,
-        "failed_tasks": failed_sessions,
-        "daily_tasks": [
-            {"day": day, "count": count}
-            for day, count in sorted(daily_session_counts.items())
-        ],
-        "machine_tasks": [
-            {"machine_id": machine_id, "count": count}
-            for machine_id, count in sorted(machine_session_counts.items())
-        ],
         "total_work_hours": round(total_hours, 1),
         "daily_work_hours": daily_work_hours,
     }

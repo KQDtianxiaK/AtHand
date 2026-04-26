@@ -170,12 +170,12 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
-            "name": "send_kimi_task",
-            "description": "给指定机器上的 Kimi Code 发送编程任务",
+            "name": "start_kimi_session",
+            "description": "在指定机器上启动一个 Kimi Code 会话",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "prompt": {"type": "string", "description": "任务提示词"},
+                    "prompt": {"type": "string", "description": "会话起始提示词"},
                     "machine_id": {"type": "string", "description": "机器 ID（可选，不填则选第一台在线机器）"},
                     "work_dir": {"type": "string", "description": "工作目录（必填，bridge 创建会话需要）"},
                 },
@@ -209,7 +209,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "get_stats",
-            "description": "获取仪表盘统计数据（任务数、工时等）",
+            "description": "获取仪表盘统计数据（会话数、工时等）",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -489,8 +489,8 @@ def delete_memo(memo_id: int | None = None, title_keyword: str | None = None) ->
         db.close()
 
 
-async def send_kimi_task(prompt: str, machine_id: str | None = None,
-                         work_dir: str | None = None) -> str:
+async def start_kimi_session(prompt: str, machine_id: str | None = None,
+                             work_dir: str | None = None) -> str:
     from fastapi import HTTPException
 
     from api.ai_control_schemas import AiControlCreateSessionBody
@@ -534,7 +534,7 @@ async def send_kimi_task(prompt: str, machine_id: str | None = None,
             detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
             return {"ok": False, "error": detail}
         except Exception as exc:
-            logger.exception("send_kimi_task failed")
+            logger.exception("start_kimi_session failed")
             return {"ok": False, "error": f"创建 Kimi 会话失败: {exc}"}
         finally:
             db.close()
@@ -658,11 +658,6 @@ def get_stats() -> str:
 
         return _ok({
             "sessions": {
-                "total": overview["total_sessions"],
-                "done": overview["done_sessions"],
-                "failed": overview["failed_sessions"],
-            },
-            "tasks": {
                 "total": overview["total_sessions"],
                 "done": overview["done_sessions"],
                 "failed": overview["failed_sessions"],
@@ -834,7 +829,7 @@ TOOL_FUNCTIONS: dict[str, Any] = {
     "create_memo": create_memo,
     "search_memos": search_memos,
     "delete_memo": delete_memo,
-    "send_kimi_task": send_kimi_task,
+    "start_kimi_session": start_kimi_session,
     "list_machines": list_machines,
     "fetch_url": fetch_url,
     "get_stats": get_stats,

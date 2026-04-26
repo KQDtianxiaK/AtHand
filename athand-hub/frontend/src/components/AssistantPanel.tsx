@@ -41,7 +41,7 @@ const TOOL_LABELS: Record<string, string> = {
   create_memo: '创建备忘录',
   search_memos: '搜索备忘录',
   delete_memo: '删除备忘录',
-  send_kimi_task: '派发 Kimi 任务',
+  start_kimi_session: '启动 Kimi 会话',
   list_machines: '列出机器',
   fetch_url: '抓取网页',
   get_stats: '查看统计',
