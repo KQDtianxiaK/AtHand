@@ -58,7 +58,6 @@ from api.assistant import router as assistant_router
 from api.ai_control import router as ai_control_router
 from api.email import router as email_router
 from api.news import router as news_router
-from ws.hub import router as ws_router
 
 app.include_router(auth_router)
 app.include_router(memos_router)
@@ -69,7 +68,6 @@ app.include_router(assistant_router)
 app.include_router(ai_control_router)
 app.include_router(email_router)
 app.include_router(news_router)
-app.include_router(ws_router)
 
 
 @app.on_event("startup")

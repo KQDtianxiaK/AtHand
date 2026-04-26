@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend build deploy install-daemon
+.PHONY: dev dev-backend dev-frontend build deploy init run
 
 # ============ 本地开发 ============
 dev: dev-backend dev-frontend
@@ -17,13 +17,6 @@ build:
 # ============ 生产运行 ============
 run:
 	cd backend && python -m uvicorn main:app --host 0.0.0.0 --port 8000
-
-# ============ Agent Daemon ============
-install-daemon:
-	cd agent-daemon && bash install.sh
-
-run-daemon:
-	cd agent-daemon && python daemon.py
 
 # ============ 初始化 ============
 init:
