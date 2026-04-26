@@ -20,27 +20,6 @@ class Machine(Base):
     last_heartbeat: Mapped[dt.datetime | None] = mapped_column(DateTime)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
 
-    tasks: Mapped[list[Task]] = relationship(back_populates="machine")
-
-
-# ---------- 任务 ----------
-class Task(Base):
-    __tablename__ = "tasks"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    machine_id: Mapped[str] = mapped_column(ForeignKey("machines.id"))
-    prompt: Mapped[str] = mapped_column(Text)
-    work_dir: Mapped[str | None] = mapped_column(String(512))
-    mode: Mapped[str] = mapped_column(String(32), default="normal")  # normal / plan / continue
-    status: Mapped[str] = mapped_column(String(32), default="queued")  # queued / running / done / failed
-    exit_code: Mapped[int | None] = mapped_column(Integer)
-    session_id: Mapped[str | None] = mapped_column(String(128))  # kimi session UUID，用于 -r 恢复
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
-    started_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
-    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
-
-    machine: Mapped[Machine] = relationship(back_populates="tasks")
-
 
 # ---------- 备忘录 ----------
 class Memo(Base):

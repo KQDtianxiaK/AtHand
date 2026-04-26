@@ -67,7 +67,7 @@ class AiControlBridgeService:
 
     The first real integration step is intentionally narrow: reach the paseo
     daemon, complete the hello handshake, and map provider snapshots into the
-    AtHand bridge model without touching the legacy Kimi task pipeline.
+    AtHand bridge model.
     """
 
     _RPC_TIMEOUT_SECONDS = 8.0
@@ -1308,10 +1308,14 @@ class AiControlBridgeService:
 
         first_error: HTTPException | None = None
         aggregated_items: list[AiControlHistoryItemOut] = []
+        seen_daemon_urls: set[str] = set()
         for machine in machines:
             daemon_url = self._daemon_url_for_machine(machine.id)
             if not daemon_url:
                 continue
+            if daemon_url in seen_daemon_urls:
+                continue
+            seen_daemon_urls.add(daemon_url)
             try:
                 response = self._get_history_from_machine(
                     machine=machine,
