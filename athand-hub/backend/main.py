@@ -50,7 +50,6 @@ app.add_middleware(
 
 # ---- 注册路由 ----
 from api.auth import router as auth_router
-from api.files import router as files_router
 from api.memos import router as memos_router
 from api.todos import router as todos_router
 from api.clock import router as clock_router
@@ -62,7 +61,6 @@ from api.news import router as news_router
 from ws.hub import router as ws_router
 
 app.include_router(auth_router)
-app.include_router(files_router)
 app.include_router(memos_router)
 app.include_router(todos_router)
 app.include_router(clock_router)

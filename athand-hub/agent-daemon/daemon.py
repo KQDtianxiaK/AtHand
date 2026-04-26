@@ -19,8 +19,6 @@ except ImportError:
     print("请安装依赖: pip install -r requirements.txt")
     sys.exit(1)
 
-from file_handler import file_list, file_read, file_write
-from kimi_runner import run_kimi_task
 from system_info import get_system_info
 from news_handler import NewsClient, handle_news_message
 
@@ -44,12 +42,7 @@ HUB_URL = config["hub_url"]
 MACHINE_ID = config["machine_id"]
 AGENT_TOKEN = config["agent_token"]
 HEARTBEAT_INTERVAL = config.get("heartbeat_interval", 30)
-ALLOWED_DIRS = config.get("allowed_dirs", ["~"])
-KIMI_COMMAND = config.get("kimi_command", "kimi")
 ADMIN_PASSWORD = config.get("admin_password", "admin123")
-
-# 当前活跃的 kimi 进程 {task_id: asyncio.subprocess.Process}
-_active_processes: dict[int, asyncio.subprocess.Process] = {}
 
 # 新闻 API 客户端（共享实例以复用 JWT token）
 _news_client = NewsClient(hub_url=HUB_URL, admin_password=ADMIN_PASSWORD)
@@ -59,124 +52,7 @@ async def handle_message(ws, data: dict):
     """处理从 Hub 收到的消息。"""
     msg_type = data.get("type", "")
 
-    if msg_type == "kimi_task":
-        task_id = data["task_id"]
-        prompt = data["prompt"]
-        work_dir = data.get("work_dir")
-        mode = data.get("mode", "normal")
-
-        logger.info("收到 Kimi 任务 #%s: %s", task_id, prompt[:80])
-
-        async def on_message(msg: dict):
-            try:
-                await ws.send(json.dumps({
-                    "type": "task_output",
-                    "task_id": task_id,
-                    "message": msg,
-                }))
-            except websockets.exceptions.ConnectionClosed:
-                logger.warning("任务 #%s 输出时连接已断开，消息丢失", task_id)
-
-        try:
-            exit_code, session_id = await run_kimi_task(
-                prompt=prompt,
-                work_dir=work_dir,
-                mode=mode,
-                kimi_command=KIMI_COMMAND,
-                on_message=on_message,
-                active_processes=_active_processes,
-                task_id=task_id,
-                session_id=data.get("session_id"),
-            )
-
-            await ws.send(json.dumps({
-                "type": "task_done",
-                "task_id": task_id,
-                "exit_code": exit_code,
-                "session_id": session_id,
-            }))
-        except websockets.exceptions.ConnectionClosed:
-            logger.warning("任务 #%s 完成但连接已断开，无法回报结果", task_id)
-        finally:
-            _active_processes.pop(task_id, None)
-
-    elif msg_type == "cancel_task":
-        task_id = data.get("task_id")
-        logger.info("收到取消任务: %s", task_id)
-        proc = _active_processes.pop(task_id, None)
-        if proc and proc.returncode is None:
-            proc.terminate()
-            logger.info("已终止任务 #%s 的进程 (SIGTERM)", task_id)
-            # 给进程 3 秒优雅退出，否则强杀
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=3)
-            except asyncio.TimeoutError:
-                proc.kill()
-                logger.warning("任务 #%s 未响应 SIGTERM，已强杀 (SIGKILL)", task_id)
-
-    elif msg_type == "kill_orphan_kimi":
-        # 查找系统上所有 kimi 进程，排除 AtHand 正在管理的，终止其余
-        import subprocess as _sp
-        tracked_pids = {p.pid for p in _active_processes.values() if p.returncode is None}
-        killed = []
-        try:
-            # 找到所有 kimi 进程（排除 grep 自身）
-            result = _sp.run(
-                ["pgrep", "-f", "kimi.*--print|kimi.*-p "],
-                capture_output=True, text=True, timeout=5,
-            )
-            all_pids = set()
-            for line in result.stdout.strip().splitlines():
-                line = line.strip()
-                if line.isdigit():
-                    all_pids.add(int(line))
-            # 排除被 AtHand 管理的进程
-            orphan_pids = all_pids - tracked_pids
-            import signal
-            for pid in orphan_pids:
-                try:
-                    import os
-                    os.kill(pid, signal.SIGTERM)
-                    killed.append(pid)
-                    logger.info("已终止孤儿 kimi 进程 PID %d", pid)
-                except ProcessLookupError:
-                    pass
-                except PermissionError:
-                    logger.warning("无权限终止 PID %d", pid)
-        except Exception as e:
-            logger.warning("查找孤儿 kimi 进程失败: %s", e)
-
-        await ws.send(json.dumps({
-            "type": "response",
-            "req_id": data.get("req_id"),
-            "data": {"killed_count": len(killed), "killed_pids": killed, "tracked_count": len(tracked_pids)},
-        }))
-
-    elif msg_type == "file_list":
-        result = file_list(data.get("path", "."), ALLOWED_DIRS)
-        await ws.send(json.dumps({
-            "type": "response",
-            "req_id": data.get("req_id"),
-            "data": result,
-        }))
-
-    elif msg_type == "file_read":
-        result = file_read(data.get("path", ""), ALLOWED_DIRS)
-        await ws.send(json.dumps({
-            "type": "response",
-            "req_id": data.get("req_id"),
-            "data": result,
-        }))
-
-    elif msg_type == "file_write":
-        result = file_write(data.get("path", ""), data.get("content", ""), ALLOWED_DIRS)
-        await ws.send(json.dumps({
-            "type": "response",
-            "req_id": data.get("req_id"),
-            "data": result,
-        }))
-
-    elif msg_type in (
+    if msg_type in (
         "news_get_stats", "news_get_items", "news_fetch",
         "news_get_digest", "news_get_digests", "news_generate_digest",
         "news_mark_read",
