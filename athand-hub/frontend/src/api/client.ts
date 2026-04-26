@@ -39,66 +39,6 @@ export async function login(password: string) {
   return data
 }
 
-// ---- Tasks ----
-export interface Task {
-  id: number
-  machine_id: string
-  prompt: string
-  work_dir: string | null
-  mode: string
-  status: string
-  exit_code: number | null
-  session_id: string | null
-  created_at: string
-  started_at: string | null
-  finished_at: string | null
-}
-
-export interface TaskMessage {
-  id: number
-  task_id: number
-  role: string
-  content: string | null
-  tool_calls: string | null
-  tool_call_id: string | null
-  created_at: string
-}
-
-export function createTask(body: { machine_id: string; prompt: string; work_dir?: string; mode?: string; session_id?: string }) {
-  return request<Task>('/api/tasks', { method: 'POST', body: JSON.stringify(body) })
-}
-
-export function getTasks(params?: { machine_id?: string; status?: string; limit?: number }) {
-  const sp = new URLSearchParams()
-  if (params?.machine_id) sp.set('machine_id', params.machine_id)
-  if (params?.status) sp.set('status', params.status)
-  if (params?.limit) sp.set('limit', String(params.limit))
-  return request<Task[]>(`/api/tasks?${sp}`)
-}
-
-export function getTaskMessages(taskId: number) {
-  return request<TaskMessage[]>(`/api/tasks/${taskId}/messages`)
-}
-
-export function getSessionMessages(sessionId: string) {
-  return request<TaskMessage[]>(`/api/tasks/session/${sessionId}/messages`)
-}
-
-export function deleteTask(taskId: number) {
-  return request<{ ok: boolean }>(`/api/tasks/${taskId}`, { method: 'DELETE' })
-}
-
-export function deleteSession(sessionId: string) {
-  return request<{ ok: boolean }>(`/api/tasks/session/${sessionId}`, { method: 'DELETE' })
-}
-
-export function killOrphanKimi(machineId: string) {
-  return request<{ killed_count: number; killed_pids: number[]; tracked_count: number }>(
-    `/api/tasks/kill-orphan-kimi?machine_id=${encodeURIComponent(machineId)}`,
-    { method: 'POST' }
-  )
-}
-
 // ---- AI Control Bridge ----
 export interface AiControlMachine {
   id: string
@@ -555,19 +495,6 @@ export interface StatsOverview {
 
 export function getStats(days = 7) {
   return request<StatsOverview>(`/api/stats/overview?days=${days}`)
-}
-
-// ---- WebSocket ----
-export function connectDashboardWS(onMessage: (data: any) => void): WebSocket {
-  const token = localStorage.getItem('token') || ''
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const ws = new WebSocket(`${proto}//${window.location.host}/ws/dashboard?token=${token}`)
-  ws.onmessage = (ev) => {
-    try {
-      onMessage(JSON.parse(ev.data))
-    } catch {}
-  }
-  return ws
 }
 
 // ---- AI Assistant ----
