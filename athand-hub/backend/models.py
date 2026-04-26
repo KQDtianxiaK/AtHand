@@ -40,22 +40,6 @@ class Task(Base):
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
 
     machine: Mapped[Machine] = relationship(back_populates="tasks")
-    messages: Mapped[list[Message]] = relationship(back_populates="task", cascade="all, delete-orphan")
-
-
-# ---------- 对话消息 ----------
-class Message(Base):
-    __tablename__ = "messages"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"))
-    role: Mapped[str] = mapped_column(String(32))  # user / assistant / tool
-    content: Mapped[str | None] = mapped_column(Text)
-    tool_calls: Mapped[str | None] = mapped_column(Text)  # JSON 字符串
-    tool_call_id: Mapped[str | None] = mapped_column(String(128))
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
-
-    task: Mapped[Task] = relationship(back_populates="messages")
 
 
 # ---------- 备忘录 ----------
