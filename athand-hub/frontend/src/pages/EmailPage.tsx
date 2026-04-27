@@ -142,11 +142,20 @@ export default function EmailPage() {
     try {
       const nextAccounts = await getEmailAccounts()
       setAccounts(nextAccounts)
-      if (nextAccounts.length && !activeAccountId) {
-        setActiveAccountId(nextAccounts[0].id)
-      } else if (selectNewest && nextAccounts.length) {
-        setActiveAccountId(nextAccounts[nextAccounts.length - 1].id)
+      if (!nextAccounts.length) {
+        setActiveAccountId(null)
+        return
       }
+
+      setActiveAccountId((previousId) => {
+        if (selectNewest) {
+          return nextAccounts[nextAccounts.length - 1].id
+        }
+        if (previousId && nextAccounts.some((account) => account.id === previousId)) {
+          return previousId
+        }
+        return nextAccounts[0].id
+      })
     } catch (error) {
       const message = getErrorMessage(error, '无法连接邮箱服务，请检查后端连接。')
       setAccountError(message)
@@ -154,7 +163,7 @@ export default function EmailPage() {
     } finally {
       setInitializingAccounts(false)
     }
-  }, [activeAccountId])
+  }, [])
 
   const loadFolders = useCallback(async () => {
     if (!activeAccountId) return
@@ -162,22 +171,30 @@ export default function EmailPage() {
     try {
       const nextFolders = await getEmailFolders(activeAccountId)
       setFolders(nextFolders)
-      if (!nextFolders.length) {
-        setActiveFolderId(null)
-        return
-      }
-      const hasActiveFolder = activeFolderId ? nextFolders.some((folder) => folder.id === activeFolderId) : false
-      if (!hasActiveFolder) {
+      setActiveFolderId((previousId) => {
+        if (!nextFolders.length) {
+          return null
+        }
+
+        if (previousId && nextFolders.some((folder) => folder.id === previousId)) {
+          return previousId
+        }
+
         const inbox = nextFolders.find((folder) => folder.folder_type === 'inbox')
-        setActiveFolderId(inbox?.id || nextFolders[0].id)
-      }
+        return inbox?.id || nextFolders[0].id
+      })
     } catch (error) {
       setFolderError(getErrorMessage(error, '文件夹暂时无法刷新。'))
     }
-  }, [activeAccountId, activeFolderId])
+  }, [activeAccountId])
 
   const loadEmails = useCallback(async () => {
     if (!activeAccountId) return
+    if (activeFolderId === null) {
+      setEmails([])
+      setLoading(false)
+      return
+    }
     setLoading(true)
     setEmailError(null)
     try {
