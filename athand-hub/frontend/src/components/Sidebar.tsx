@@ -159,13 +159,13 @@ export default function Sidebar({ open, onClose, collapsed, onToggleCollapsed }:
                   {({ isActive }) => (
                     <>
                       <span
-                        className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[1rem] border transition-all ${
+                        className={`inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all ${
                           isActive
                             ? 'border-accent/20 bg-surface-elevated/95 text-accent'
                             : 'border-transparent bg-page/50 text-tx-muted group-hover:border-bd group-hover:bg-surface-elevated/90 group-hover:text-tx-sub'
                         }`}
                       >
-                        <Icon className="h-4 w-4" />
+                        <Icon className="h-5 w-5" />
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium">{item.label}</span>
