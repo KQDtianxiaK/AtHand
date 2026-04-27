@@ -62,6 +62,34 @@ function formatDate(d: string | null) {
   return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+  return fallback
+}
+
+function InlineNotice({
+  message,
+  actionLabel,
+  onAction,
+}: {
+  message: string
+  actionLabel?: string
+  onAction?: () => void
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-[1rem] border border-danger/20 bg-danger/10 px-3 py-2.5 text-xs leading-6 text-danger">
+      <span className="min-w-0 flex-1">{message}</span>
+      {actionLabel && onAction ? (
+        <button onClick={onAction} className="shrink-0 rounded-full border border-danger/25 px-2.5 py-1 font-medium transition hover:bg-danger/10">
+          {actionLabel}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
 export default function EmailPage() {
   const [accounts, setAccounts] = useState<EmailAccount[]>([])
   const [activeAccountId, setActiveAccountId] = useState<number | null>(null)
@@ -70,8 +98,13 @@ export default function EmailPage() {
   const [emails, setEmails] = useState<EmailBrief[]>([])
   const [selectedEmail, setSelectedEmail] = useState<EmailDetail | null>(null)
   const [search, setSearch] = useState('')
+  const [initializingAccounts, setInitializingAccounts] = useState(true)
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [accountError, setAccountError] = useState<string | null>(null)
+  const [folderError, setFolderError] = useState<string | null>(null)
+  const [emailError, setEmailError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const [showAccountDialog, setShowAccountDialog] = useState(false)
   const [editingAccount, setEditingAccount] = useState<EmailAccount | null>(null)
@@ -105,6 +138,7 @@ export default function EmailPage() {
   }
 
   const loadAccounts = useCallback(async (selectNewest = false) => {
+    setAccountError(null)
     try {
       const nextAccounts = await getEmailAccounts()
       setAccounts(nextAccounts)
@@ -114,26 +148,43 @@ export default function EmailPage() {
         setActiveAccountId(nextAccounts[nextAccounts.length - 1].id)
       }
     } catch (error) {
+      const message = getErrorMessage(error, '无法连接邮箱服务，请检查后端连接。')
+      setAccountError(message)
       console.error('加载邮箱账号失败:', error)
+    } finally {
+      setInitializingAccounts(false)
     }
   }, [activeAccountId])
 
   const loadFolders = useCallback(async () => {
     if (!activeAccountId) return
-    const nextFolders = await getEmailFolders(activeAccountId)
-    setFolders(nextFolders)
-    if (nextFolders.length && !activeFolderId) {
-      const inbox = nextFolders.find((folder) => folder.folder_type === 'inbox')
-      setActiveFolderId(inbox?.id || nextFolders[0].id)
+    setFolderError(null)
+    try {
+      const nextFolders = await getEmailFolders(activeAccountId)
+      setFolders(nextFolders)
+      if (!nextFolders.length) {
+        setActiveFolderId(null)
+        return
+      }
+      const hasActiveFolder = activeFolderId ? nextFolders.some((folder) => folder.id === activeFolderId) : false
+      if (!hasActiveFolder) {
+        const inbox = nextFolders.find((folder) => folder.folder_type === 'inbox')
+        setActiveFolderId(inbox?.id || nextFolders[0].id)
+      }
+    } catch (error) {
+      setFolderError(getErrorMessage(error, '文件夹暂时无法刷新。'))
     }
   }, [activeAccountId, activeFolderId])
 
   const loadEmails = useCallback(async () => {
     if (!activeAccountId) return
     setLoading(true)
+    setEmailError(null)
     try {
       const list = await getEmails(activeAccountId, activeFolderId || undefined, search || undefined)
       setEmails(list)
+    } catch (error) {
+      setEmailError(getErrorMessage(error, '邮件列表暂时无法刷新。'))
     } finally {
       setLoading(false)
     }
@@ -171,17 +222,23 @@ export default function EmailPage() {
   }, [loadEmails, loadFolders])
 
   const handleSelectEmail = async (brief: EmailBrief) => {
-    const detail = await getEmailDetail(brief.id)
-    setSelectedEmail(detail)
-    if (!brief.is_read) {
-      await markEmailRead(brief.id, true)
-      setEmails((prev) => prev.map((email) => (email.id === brief.id ? { ...email, is_read: true } : email)))
-      void loadFolders()
+    setActionError(null)
+    try {
+      const detail = await getEmailDetail(brief.id)
+      setSelectedEmail(detail)
+      if (!brief.is_read) {
+        await markEmailRead(brief.id, true)
+        setEmails((prev) => prev.map((email) => (email.id === brief.id ? { ...email, is_read: true } : email)))
+        void loadFolders()
+      }
+    } catch (error) {
+      setActionError(getErrorMessage(error, '邮件详情加载失败。'))
     }
   }
 
   const handleSync = async () => {
     if (!activeAccountId) return
+    setActionError(null)
     setSyncing(true)
     try {
       await triggerEmailSync(activeAccountId)
@@ -190,85 +247,168 @@ export default function EmailPage() {
         await loadEmails()
         setSyncing(false)
       }, 3000)
-    } catch {
+    } catch (error) {
+      setActionError(getErrorMessage(error, '同步邮箱失败。'))
       setSyncing(false)
     }
   }
 
   const handleDelete = async (id: number) => {
-    await deleteEmail(id)
-    setEmails((prev) => prev.filter((email) => email.id !== id))
-    if (selectedEmail?.id === id) setSelectedEmail(null)
-    void loadFolders()
+    setActionError(null)
+    try {
+      await deleteEmail(id)
+      setEmails((prev) => prev.filter((email) => email.id !== id))
+      if (selectedEmail?.id === id) setSelectedEmail(null)
+      void loadFolders()
+    } catch (error) {
+      setActionError(getErrorMessage(error, '删除邮件失败。'))
+    }
   }
 
   const handleStar = async (brief: EmailBrief) => {
-    await markEmailStar(brief.id, !brief.is_starred)
-    setEmails((prev) => prev.map((email) => (email.id === brief.id ? { ...email, is_starred: !email.is_starred } : email)))
+    setActionError(null)
+    try {
+      await markEmailStar(brief.id, !brief.is_starred)
+      setEmails((prev) => prev.map((email) => (email.id === brief.id ? { ...email, is_starred: !email.is_starred } : email)))
+    } catch (error) {
+      setActionError(getErrorMessage(error, '更新星标失败。'))
+    }
   }
 
   const handleMarkUnread = async (emailId: number) => {
-    await markEmailRead(emailId, false)
-    setEmails((prev) => prev.map((email) => (email.id === emailId ? { ...email, is_read: false } : email)))
-    if (selectedEmail?.id === emailId) {
-      setSelectedEmail((prev) => (prev ? { ...prev, is_read: false } : prev))
+    setActionError(null)
+    try {
+      await markEmailRead(emailId, false)
+      setEmails((prev) => prev.map((email) => (email.id === emailId ? { ...email, is_read: false } : email)))
+      if (selectedEmail?.id === emailId) {
+        setSelectedEmail((prev) => (prev ? { ...prev, is_read: false } : prev))
+      }
+      void loadFolders()
+    } catch (error) {
+      setActionError(getErrorMessage(error, '更新未读状态失败。'))
     }
-    void loadFolders()
   }
 
   const handleMoveEmail = async (emailId: number, targetFolderId: number) => {
-    await moveEmail(emailId, targetFolderId)
-    setEmails((prev) => prev.filter((email) => email.id !== emailId))
-    if (selectedEmail?.id === emailId) setSelectedEmail(null)
-    setShowMoveMenu(false)
-    void loadFolders()
+    setActionError(null)
+    try {
+      await moveEmail(emailId, targetFolderId)
+      setEmails((prev) => prev.filter((email) => email.id !== emailId))
+      if (selectedEmail?.id === emailId) setSelectedEmail(null)
+      setShowMoveMenu(false)
+      void loadFolders()
+    } catch (error) {
+      setActionError(getErrorMessage(error, '移动邮件失败。'))
+    }
   }
 
   const handleFolderReadAll = async (folderId: number) => {
-    await markFolderReadAll(folderId)
-    setEmails((prev) => prev.map((email) => (email.folder_id === folderId ? { ...email, is_read: true } : email)))
-    setFolders((prev) => prev.map((folder) => (folder.id === folderId ? { ...folder, unread_count: 0 } : folder)))
-    setCtxMenu(null)
+    setActionError(null)
+    try {
+      await markFolderReadAll(folderId)
+      setEmails((prev) => prev.map((email) => (email.folder_id === folderId ? { ...email, is_read: true } : email)))
+      setFolders((prev) => prev.map((folder) => (folder.id === folderId ? { ...folder, unread_count: 0 } : folder)))
+      setCtxMenu(null)
+    } catch (error) {
+      setActionError(getErrorMessage(error, '批量标记已读失败。'))
+    }
   }
 
   const handleToggleMute = async (folderId: number) => {
-    const result = await muteEmailFolder(folderId)
-    setFolders((prev) => prev.map((folder) => (folder.id === folderId ? { ...folder, is_muted: result.is_muted } : folder)))
-    setCtxMenu(null)
+    setActionError(null)
+    try {
+      const result = await muteEmailFolder(folderId)
+      setFolders((prev) => prev.map((folder) => (folder.id === folderId ? { ...folder, is_muted: result.is_muted } : folder)))
+      setCtxMenu(null)
+    } catch (error) {
+      setActionError(getErrorMessage(error, '更新文件夹静音状态失败。'))
+    }
   }
 
   const handleRenameFolder = async (folderId: number) => {
     const name = renameValue.trim()
     if (!name) return
-    const updated = await renameEmailFolder(folderId, name)
-    setFolders((prev) => prev.map((folder) => (folder.id === folderId ? updated : folder)))
-    setRenamingFolderId(null)
-    setCtxMenu(null)
+    setActionError(null)
+    try {
+      const updated = await renameEmailFolder(folderId, name)
+      setFolders((prev) => prev.map((folder) => (folder.id === folderId ? updated : folder)))
+      setRenamingFolderId(null)
+      setCtxMenu(null)
+    } catch (error) {
+      setActionError(getErrorMessage(error, '重命名文件夹失败。'))
+    }
   }
 
   const handleDeleteFolder = async (folder: EmailFolder) => {
     if (!confirm(`确定删除文件夹「${folder.name}」吗？其中的邮件也将一并删除。`)) return
-    await deleteEmailFolder(folder.id)
-    setFolders((prev) => prev.filter((item) => item.id !== folder.id))
-    if (activeFolderId === folder.id) {
-      const inbox = folders.find((item) => item.folder_type === 'inbox')
-      setActiveFolderId(inbox?.id || null)
+    setActionError(null)
+    try {
+      await deleteEmailFolder(folder.id)
+      setFolders((prev) => prev.filter((item) => item.id !== folder.id))
+      if (activeFolderId === folder.id) {
+        const inbox = folders.find((item) => item.folder_type === 'inbox')
+        setActiveFolderId(inbox?.id || null)
+      }
+      setCtxMenu(null)
+    } catch (error) {
+      setActionError(getErrorMessage(error, '删除文件夹失败。'))
     }
-    setCtxMenu(null)
   }
 
   const handleCreateFolder = async () => {
     if (!activeAccountId || !newFolderName.trim()) return
+    setActionError(null)
     setCreatingFolder(true)
     try {
       const folder = await createEmailFolder(activeAccountId, newFolderName.trim())
       setFolders((prev) => [...prev, folder])
       setNewFolderName('')
       setShowCreateFolder(false)
+    } catch (error) {
+      setActionError(getErrorMessage(error, '创建文件夹失败。'))
     } finally {
       setCreatingFolder(false)
     }
     setCtxMenu(null)
+  }
+
+  if (initializingAccounts) {
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <div className={`${shellPanelClass} w-full max-w-xl px-8 py-10 text-center`}>
+          <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Mail Hub</div>
+          <div className="mt-4 text-6xl">📡</div>
+          <h2 className="mt-5 text-[1.9rem] font-semibold tracking-[-0.04em] text-tx">正在连接邮箱工作区</h2>
+          <p className="mx-auto mt-3 max-w-md text-sm leading-7 text-tx-muted">先确认账号与文件夹索引，再进入邮件列表和详情阅读区。</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!accounts.length && accountError) {
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <div className={`${shellPanelClass} w-full max-w-xl px-8 py-10 text-center`}>
+          <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Mail Hub</div>
+          <div className="mt-4 text-6xl">⚠️</div>
+          <h2 className="mt-5 text-[1.9rem] font-semibold tracking-[-0.04em] text-tx">邮箱暂时不可用</h2>
+          <p className="mx-auto mt-3 max-w-md text-sm leading-7 text-tx-muted">{accountError}</p>
+          <div className="mt-7 flex justify-center gap-3">
+            <button onClick={() => void loadAccounts()} className={`${primaryButtonClass} px-5 py-3 text-sm`}>
+              重试连接
+            </button>
+            <button onClick={() => setShowAccountDialog(true)} className={`${secondaryButtonClass} px-5 py-3 text-sm`}>
+              添加邮箱账号
+            </button>
+          </div>
+        </div>
+        <EmailAccountDialog
+          open={showAccountDialog}
+          onClose={() => setShowAccountDialog(false)}
+          onSaved={() => void loadAccounts(true)}
+        />
+      </div>
+    )
   }
 
   if (composing && activeAccount) {
@@ -312,6 +452,12 @@ export default function EmailPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 p-4 lg:p-6 xl:grid xl:grid-cols-[310px_360px_minmax(0,1fr)]" onClick={closeFloatingMenus}>
+      {actionError ? (
+        <div className="xl:col-span-3" onClick={(event) => event.stopPropagation()}>
+          <InlineNotice message={actionError} actionLabel="关闭" onAction={() => setActionError(null)} />
+        </div>
+      ) : null}
+
       <section className={`flex min-h-[360px] flex-col overflow-hidden ${shellPanelClass}`}>
         <div className="border-b border-bd/70 px-5 py-5">
           <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Mail Hub</div>
@@ -356,6 +502,11 @@ export default function EmailPage() {
                 {syncing ? '同步中...' : '同步邮箱'}
               </button>
             </div>
+            {accountError ? (
+              <div className="mt-3">
+                <InlineNotice message={`账号列表刷新失败：${accountError}`} actionLabel="重试" onAction={() => void loadAccounts()} />
+              </div>
+            ) : null}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -379,6 +530,12 @@ export default function EmailPage() {
                 新建
               </button>
             </div>
+
+            {folderError ? (
+              <div className="px-1 pb-3">
+                <InlineNotice message={`文件夹刷新失败：${folderError}`} actionLabel="重试" onAction={() => void loadFolders()} />
+              </div>
+            ) : null}
 
             <nav className="space-y-2 overflow-auto">
               {folders.map((folder) => {
@@ -498,6 +655,8 @@ export default function EmailPage() {
                   )}
                 </div>
               </div>
+
+              {emailError ? <InlineNotice message={`邮件列表刷新失败：${emailError}`} actionLabel="重试" onAction={() => void loadEmails()} /> : null}
             </div>
           </div>
 
@@ -923,10 +1082,16 @@ function ContactsPanel({ onClose, getEmailContacts, createEmailContact, updateEm
   const [newEmail, setNewEmail] = useState('')
   const [newName, setNewName] = useState('')
   const [saving, setSaving] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const load = async (query?: string) => {
-    const data = await getEmailContacts(query || undefined)
-    setContacts(data)
+    setErrorMessage(null)
+    try {
+      const data = await getEmailContacts(query || undefined)
+      setContacts(data)
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error, '联系人暂时无法加载。'))
+    }
   }
 
   useEffect(() => {
@@ -940,11 +1105,14 @@ function ContactsPanel({ onClose, getEmailContacts, createEmailContact, updateEm
   }
 
   const saveEdit = async (id: number) => {
+    setErrorMessage(null)
     setSaving(true)
     try {
       const updated = await updateEmailContact(id, { name: editName, notes: editNotes })
       setContacts((prev) => prev.map((contact) => (contact.id === id ? updated : contact)))
       setEditingId(null)
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error, '保存联系人失败。'))
     } finally {
       setSaving(false)
     }
@@ -952,12 +1120,18 @@ function ContactsPanel({ onClose, getEmailContacts, createEmailContact, updateEm
 
   const handleDelete = async (id: number) => {
     if (!confirm('确定删除该联系人？')) return
-    await deleteEmailContact(id)
-    setContacts((prev) => prev.filter((contact) => contact.id !== id))
+    setErrorMessage(null)
+    try {
+      await deleteEmailContact(id)
+      setContacts((prev) => prev.filter((contact) => contact.id !== id))
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error, '删除联系人失败。'))
+    }
   }
 
   const handleAdd = async () => {
     if (!newEmail.trim()) return
+    setErrorMessage(null)
     setSaving(true)
     try {
       const contact = await createEmailContact({ email: newEmail.trim(), name: newName.trim() || undefined })
@@ -965,6 +1139,8 @@ function ContactsPanel({ onClose, getEmailContacts, createEmailContact, updateEm
       setAdding(false)
       setNewEmail('')
       setNewName('')
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error, '创建联系人失败。'))
     } finally {
       setSaving(false)
     }
@@ -994,6 +1170,8 @@ function ContactsPanel({ onClose, getEmailContacts, createEmailContact, updateEm
             className={fieldClass}
           />
         </div>
+
+        {errorMessage ? <InlineNotice message={errorMessage} actionLabel="重试" onAction={() => void load(search)} /> : null}
 
         {adding && (
           <div className={`${sectionCardClass} space-y-3 p-4`}>

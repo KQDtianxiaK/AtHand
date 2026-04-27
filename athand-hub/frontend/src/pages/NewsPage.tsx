@@ -1,99 +1,185 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  getNewsItems, getLatestDigest, getNewsDigests, triggerNewsFetch,
-  triggerDigestGeneration, triggerTodayDigestGeneration,
-  markNewsItemRead, markDigestRead,
-  type NewsItemData, type NewsDigestData,
+  getLatestDigest,
+  getNewsDigests,
+  getNewsItems,
+  markDigestRead,
+  markNewsItemRead,
+  triggerDigestGeneration,
+  triggerNewsFetch,
+  triggerTodayDigestGeneration,
+  type NewsDigestData,
+  type NewsItemData,
 } from '../api/client'
 import NewsSettingsDialog from '../components/NewsSettingsDialog'
 
-// ---- 类型 badge 颜色 ----
-const TYPE_BADGES: Record<string, { label: string; color: string }> = {
-  tweet: { label: 'X/Twitter', color: 'bg-sky-500/20 text-sky-400' },
-  blog_post: { label: '博客', color: 'bg-emerald-500/20 text-emerald-400' },
-  podcast: { label: '播客', color: 'bg-purple-500/20 text-purple-400' },
-  article: { label: '文章', color: 'bg-amber-500/20 text-amber-400' },
+const shellPanelClass = 'rounded-[1.75rem] border border-bd bg-surface/[0.88] shadow-ambient backdrop-blur-xl'
+const sectionCardClass = 'rounded-[1.35rem] border border-bd bg-page/[0.52]'
+const insetCardClass = 'rounded-[1.1rem] border border-bd bg-page/[0.4]'
+const fieldClass = 'w-full rounded-[1.05rem] border border-bd-strong bg-surface-elevated/[0.9] px-3 py-2.5 text-sm text-tx shadow-inset outline-none transition placeholder:text-tx-faint focus:border-accent/40 focus:ring-2 focus:ring-accent/10'
+const secondaryButtonClass = 'rounded-[1rem] border border-bd bg-page/[0.55] px-3 py-2 text-xs font-medium text-tx-muted transition hover:border-bd-strong hover:bg-surface-elevated/[0.92] hover:text-tx-sub disabled:opacity-50'
+const primaryButtonClass = 'rounded-[1rem] bg-accent px-3 py-2 text-xs font-medium text-white transition hover:bg-accent-strong disabled:opacity-50'
+const proseClass = 'prose prose-sm max-w-none prose-headings:text-tx prose-headings:tracking-[-0.03em] prose-p:text-tx prose-p:leading-7 prose-strong:text-tx-sub prose-em:text-tx-muted prose-code:text-accent prose-code:bg-page/[0.65] prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-[0.55rem] prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-pre:bg-surface-elevated/[0.92] prose-pre:border prose-pre:border-bd prose-pre:rounded-[1rem] prose-blockquote:border-accent prose-blockquote:text-tx-muted prose-a:text-accent prose-a:no-underline hover:prose-a:underline prose-ul:text-tx prose-ol:text-tx prose-li:text-tx prose-hr:border-bd prose-table:text-tx prose-th:text-tx prose-td:text-tx'
+
+const TYPE_BADGES: Record<string, { label: string; className: string }> = {
+  tweet: { label: 'X/Twitter', className: 'border-sky-500/20 bg-sky-500/10 text-sky-600' },
+  blog_post: { label: '博客', className: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600' },
+  podcast: { label: '播客', className: 'border-amber-500/20 bg-amber-500/10 text-amber-600' },
+  article: { label: '文章', className: 'border-accent/20 bg-accent-soft/[0.78] text-accent' },
 }
 
-function TypeBadge({ type }: { type: string }) {
-  const badge = TYPE_BADGES[type] || { label: type, color: 'bg-gray-500/20 text-gray-400' }
-  return (
-    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${badge.color}`}>
-      {badge.label}
-    </span>
-  )
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+  return fallback
 }
 
-function SourceBadge({ name }: { name: string }) {
-  if (!name) return null
-  return (
-    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-white/5 text-tx-muted border border-bd">
-      {name}
-    </span>
-  )
+function formatTime(iso: string | null) {
+  if (!iso) return ''
+  const value = new Date(iso)
+  const now = new Date()
+  const diffMs = now.getTime() - value.getTime()
+  const diffHours = Math.floor(diffMs / 3600000)
+  if (diffHours < 1) {
+    return `${Math.max(1, Math.floor(diffMs / 60000))} 分钟前`
+  }
+  if (diffHours < 24) {
+    return `${diffHours} 小时前`
+  }
+  if (diffHours < 48) {
+    return '昨天'
+  }
+  return value.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
 
-// ---- 推文图片工具 ----
-function extractImageUrls(text: string): string[] {
+function formatDigestStamp(iso: string | null) {
+  if (!iso) return '尚未生成'
+  return new Date(iso).toLocaleString('zh-CN')
+}
+
+function extractImageUrls(text: string) {
   const re = /https?:\/\/pbs\.twimg\.com\/media\/[^\s<>"')]+/gi
   const found = new Set<string>()
-  ;(text.match(re) || []).forEach(u => found.add(u.replace(/[.,;:!?)]+$/, '')))
+  ;(text.match(re) || []).forEach((url) => found.add(url.replace(/[.,;:!?)]+$/, '')))
   return [...found]
 }
 
-function stripImageUrls(text: string): string {
+function stripImageUrls(text: string) {
   return text
     .replace(/https?:\/\/pbs\.twimg\.com\/media\/[^\s<>"')]+/gi, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
 
-// ---- 图片灯箱 ----
+function TypeBadge({ type }: { type: string }) {
+  const badge = TYPE_BADGES[type] || { label: type, className: 'border-bd bg-page/[0.7] text-tx-muted' }
+  return <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${badge.className}`}>{badge.label}</span>
+}
+
+function SourceBadge({ name }: { name: string }) {
+  if (!name) return null
+  return <span className="rounded-full border border-bd bg-page/[0.7] px-2.5 py-1 text-[11px] font-medium text-tx-muted">{name}</span>
+}
+
+function StatCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className={`${insetCardClass} px-4 py-3`}>
+      <div className="text-[11px] text-tx-faint">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-tx-sub">{value}</div>
+      <div className="mt-1 text-xs leading-5 text-tx-muted">{detail}</div>
+    </div>
+  )
+}
+
+function InlineNotice({
+  message,
+  actionLabel,
+  onAction,
+}: {
+  message: string
+  actionLabel?: string
+  onAction?: () => void
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-[1rem] border border-danger/20 bg-danger/10 px-3 py-2.5 text-xs leading-6 text-danger">
+      <span className="min-w-0 flex-1">{message}</span>
+      {actionLabel && onAction ? (
+        <button onClick={onAction} className="shrink-0 rounded-full border border-danger/25 px-2.5 py-1 font-medium transition hover:bg-danger/10">
+          {actionLabel}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+function StatusPill({ status }: { status: string }) {
+  const label = status === 'ready' ? '已就绪' : status === 'generating' ? '生成中' : status === 'failed' ? '失败' : '未准备'
+  const className =
+    status === 'ready'
+      ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600'
+      : status === 'generating'
+        ? 'border-amber-500/20 bg-amber-500/10 text-amber-600'
+        : status === 'failed'
+          ? 'border-danger/20 bg-danger/10 text-danger'
+          : 'border-bd bg-page/[0.7] text-tx-muted'
+
+  return <span className={`rounded-full border px-3 py-1 text-[11px] font-medium ${className}`}>{label}</span>
+}
+
 function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   const [scale, setScale] = useState(1)
-  const [pos, setPos] = useState({ x: 0, y: 0 })
+  const [position, setPosition] = useState({ x: 0, y: 0 })
   const dragging = useRef(false)
   const dragStart = useRef({ mx: 0, my: 0, px: 0, py: 0 })
 
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault()
-    setScale(s => Math.min(8, Math.max(0.5, s - e.deltaY * 0.002)))
+  const handleWheel = (event: React.WheelEvent) => {
+    event.preventDefault()
+    setScale((value) => Math.min(8, Math.max(0.5, value - event.deltaY * 0.002)))
   }
-  const handleMouseDown = (e: React.MouseEvent) => {
+
+  const handleMouseDown = (event: React.MouseEvent) => {
     dragging.current = true
-    dragStart.current = { mx: e.clientX, my: e.clientY, px: pos.x, py: pos.y }
+    dragStart.current = { mx: event.clientX, my: event.clientY, px: position.x, py: position.y }
   }
-  const handleMouseMove = (e: React.MouseEvent) => {
+
+  const handleMouseMove = (event: React.MouseEvent) => {
     if (!dragging.current) return
-    setPos({ x: dragStart.current.px + e.clientX - dragStart.current.mx, y: dragStart.current.py + e.clientY - dragStart.current.my })
+    setPosition({
+      x: dragStart.current.px + event.clientX - dragStart.current.mx,
+      y: dragStart.current.py + event.clientY - dragStart.current.my,
+    })
   }
-  const handleMouseUp = () => { dragging.current = false }
+
+  const handleMouseUp = () => {
+    dragging.current = false
+  }
 
   return (
-    <div className="fixed inset-0 bg-black/90 z-[100] flex flex-col items-center justify-center" onClick={onClose}>
-      <div className="absolute top-4 right-4 flex items-center gap-2 z-10" onClick={e => e.stopPropagation()}>
-        <button onClick={() => setScale(s => Math.min(8, s * 1.3))} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white text-lg flex items-center justify-center">+</button>
-        <button onClick={() => setScale(s => Math.max(0.5, s / 1.3))} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white text-lg flex items-center justify-center">−</button>
-        <button onClick={() => { setScale(1); setPos({ x: 0, y: 0 }) }} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white text-xs flex items-center justify-center">1:1</button>
-        <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white text-xl flex items-center justify-center">×</button>
+    <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/90" onClick={onClose}>
+      <div className="absolute right-4 top-4 z-10 flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
+        <button onClick={() => setScale((value) => Math.min(8, value * 1.25))} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-lg text-white transition hover:bg-white/30">+</button>
+        <button onClick={() => setScale((value) => Math.max(0.5, value / 1.25))} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-lg text-white transition hover:bg-white/30">−</button>
+        <button onClick={() => { setScale(1); setPosition({ x: 0, y: 0 }) }} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-xs font-medium text-white transition hover:bg-white/30">1:1</button>
+        <button onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-xl text-white transition hover:bg-white/30">×</button>
       </div>
       <div
-        className="w-full h-full flex items-center justify-center overflow-hidden cursor-grab active:cursor-grabbing"
+        className="flex h-full w-full cursor-grab items-center justify-center overflow-hidden active:cursor-grabbing"
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        onClick={e => e.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
       >
         <img
           src={src}
           alt=""
           draggable={false}
           style={{
-            transform: `translate(${pos.x}px,${pos.y}px) scale(${scale})`,
+            transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
             transition: dragging.current ? 'none' : 'transform 0.15s',
             maxWidth: '90vw',
             maxHeight: '90vh',
@@ -106,253 +192,347 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   )
 }
 
-// ---- 时间格式化 ----
-function formatTime(iso: string | null) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  const now = new Date()
-  const diffMs = now.getTime() - d.getTime()
-  const diffH = Math.floor(diffMs / 3600000)
-  if (diffH < 1) return `${Math.max(1, Math.floor(diffMs / 60000))} 分钟前`
-  if (diffH < 24) return `${diffH} 小时前`
-  if (diffH < 48) return '昨天'
-  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
-}
-
-// ---- 新闻卡片 ----
-function NewsCard({ item, cols, onClick }: { item: NewsItemData; cols: 1 | 2 | 3; onClick: () => void }) {
+function NewsCard({
+  item,
+  cols,
+  selected,
+  onClick,
+}: {
+  item: NewsItemData
+  cols: 1 | 2 | 3
+  selected: boolean
+  onClick: () => void
+}) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
 
   const imageUrls = item.item_type === 'tweet' ? extractImageUrls(item.content) : []
   const rawContent = item.summary || item.content
   const cleanContent = (() => {
     let text = imageUrls.length > 0 ? stripImageUrls(rawContent) : rawContent
-    // 非推文内容折叠多余空行，避免卡片里出现大段空白
     if (item.item_type !== 'tweet') {
       text = text.replace(/\n{3,}/g, '\n\n').trim()
     }
     return text
   })()
-  const isTweet = item.item_type === 'tweet'
-  const maxLen = cols === 1 ? 800 : (isTweet || item.content.length < 500 ? 500 : 300)
+  const maxLen = cols === 1 ? 820 : cols === 2 ? 420 : 260
 
   let metrics: { likes?: number; retweets?: number; replies?: number } = {}
-  try { metrics = JSON.parse(item.metadata_json || '{}') } catch {}
+  try {
+    metrics = JSON.parse(item.metadata_json || '{}')
+  } catch {
+    metrics = {}
+  }
 
   return (
     <>
-      <div
-        className={`bg-surface rounded-xl p-4 hover:bg-raised transition-colors cursor-pointer border border-bd flex flex-col ${item.is_read ? 'opacity-70' : ''}`}
+      <button
+        type="button"
         onClick={onClick}
+        className={`w-full rounded-[1.25rem] border p-4 text-left transition-all ${
+          selected
+            ? 'border-accent/20 bg-accent-soft/[0.82] shadow-float ring-1 ring-accent/10'
+            : item.is_read
+              ? 'border-bd bg-surface-elevated/[0.88] hover:border-bd-strong hover:bg-surface-elevated/[0.96]'
+              : 'border-accent/15 bg-accent-soft/[0.48] hover:border-accent/20 hover:bg-accent-soft/[0.58]'
+        }`}
       >
-        {/* 头部: badge + 时间 */}
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <TypeBadge type={item.item_type} />
-            {item.source_name && <SourceBadge name={item.source_name} />}
+            {item.source_name ? <SourceBadge name={item.source_name} /> : null}
+            {!item.is_read ? <span className="rounded-full bg-accent px-2 py-1 text-[11px] font-medium text-white">未读</span> : null}
           </div>
-          <span className="text-xs text-tx-muted shrink-0 ml-2">{formatTime(item.published_at)}</span>
+          <span className="shrink-0 text-xs text-tx-faint">{formatTime(item.published_at)}</span>
         </div>
 
-        {/* 作者 */}
-        {item.author && <p className="text-xs text-tx-muted mb-1.5">{item.author}</p>}
+        {item.author ? <p className="mt-3 text-xs text-tx-muted">{item.author}</p> : null}
+        {item.title && item.item_type !== 'tweet' ? <h3 className="mt-2 text-base font-semibold leading-6 text-tx">{item.title}</h3> : null}
 
-        {/* 标题 */}
-        {item.title && item.item_type !== 'tweet' && (
-          <h3 className="font-semibold text-tx mb-2 line-clamp-2">{item.title}</h3>
-        )}
-
-        {/* 内嵌图 (first image inline) */}
-        {imageUrls.length > 0 && (
-          <div
-            className="mb-2 rounded-lg overflow-hidden"
-            onClick={e => { e.stopPropagation(); setLightboxSrc(imageUrls[0]) }}
-          >
+        {imageUrls.length > 0 ? (
+          <div className="mt-3 overflow-hidden rounded-[1rem] border border-bd bg-page/[0.45]" onClick={(event) => { event.stopPropagation(); setLightboxSrc(imageUrls[0]) }}>
             <img
               src={imageUrls[0]}
               alt=""
               loading="lazy"
-              className="w-full object-cover rounded-lg hover:opacity-90 transition-opacity cursor-zoom-in"
-              style={{ maxHeight: cols === 1 ? '320px' : '200px' }}
+              className="w-full cursor-zoom-in object-cover transition hover:opacity-90"
+              style={{ maxHeight: cols === 1 ? '320px' : '210px' }}
             />
           </div>
-        )}
+        ) : null}
 
-        {/* 正文 */}
-        <p className={`text-sm text-tx-sub leading-relaxed flex-1 ${isTweet ? 'whitespace-pre-line' : 'whitespace-normal line-clamp-4'}`}>
-          {cleanContent.length > maxLen ? cleanContent.slice(0, maxLen) + '...' : cleanContent}
+        <p className={`mt-3 text-sm leading-7 text-tx-sub ${item.item_type === 'tweet' ? 'whitespace-pre-line' : 'line-clamp-5 whitespace-normal'}`}>
+          {cleanContent.length > maxLen ? `${cleanContent.slice(0, maxLen)}...` : cleanContent}
         </p>
 
-        {/* 推文指标 */}
-        {item.item_type === 'tweet' && metrics.likes !== undefined && (
-          <div className="flex items-center gap-4 mt-2 text-xs text-tx-muted">
+        {item.item_type === 'tweet' && metrics.likes !== undefined ? (
+          <div className="mt-3 flex items-center gap-4 text-xs text-tx-muted">
             <span>❤️ {metrics.likes?.toLocaleString()}</span>
             <span>🔁 {metrics.retweets?.toLocaleString()}</span>
-            {metrics.replies !== undefined && <span>💬 {metrics.replies?.toLocaleString()}</span>}
+            {metrics.replies !== undefined ? <span>💬 {metrics.replies?.toLocaleString()}</span> : null}
           </div>
-        )}
+        ) : null}
 
-        {/* 底部: 原文链接 */}
-        {item.original_url && (
+        {item.original_url ? (
           <a
             href={item.original_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-block mt-3 text-xs text-blue-400 hover:text-blue-300"
-            onClick={(e) => e.stopPropagation()}
+            className="mt-4 inline-flex text-xs font-medium text-accent transition hover:text-accent-strong"
+            onClick={(event) => event.stopPropagation()}
           >
-            查看原文 →
+            查看原文
           </a>
-        )}
-      </div>
+        ) : null}
+      </button>
 
-      {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
+      {lightboxSrc ? <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} /> : null}
     </>
   )
 }
 
-// ---- 每日总结 Tab ----
-function DigestView({ digest, onGenerateDigest }: {
+function DigestView({
+  digest,
+  title,
+  description,
+  emptyLabel,
+  emptyDescription,
+  actionLabel,
+  onGenerate,
+}: {
   digest: NewsDigestData | null
-  onGenerateDigest: () => void
+  title: string
+  description: string
+  emptyLabel: string
+  emptyDescription: string
+  actionLabel: string
+  onGenerate: () => void
 }) {
   if (!digest) {
     return (
-      <div className="text-center py-16">
-        <p className="text-tx-muted mb-4">暂无总结</p>
-        <button
-          onClick={onGenerateDigest}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors"
-        >
-          生成今日总结
-        </button>
+      <div className="flex min-h-[360px] items-center justify-center">
+        <div className={`${sectionCardClass} w-full max-w-2xl px-8 py-12 text-center`}>
+          <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Digest Workspace</div>
+          <div className="mt-5 text-5xl">🧭</div>
+          <h3 className="mt-5 text-xl font-semibold tracking-[-0.03em] text-tx">{emptyLabel}</h3>
+          <p className="mt-3 text-sm leading-7 text-tx-faint">{emptyDescription}</p>
+          <button onClick={onGenerate} className={`${primaryButtonClass} mt-6 px-5 py-3 text-sm`}>
+            {actionLabel}
+          </button>
+        </div>
       </div>
     )
   }
 
   if (digest.status === 'generating') {
     return (
-      <div className="text-center py-16">
-        <div className="inline-block w-8 h-8 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mb-4" />
-        <p className="text-tx-muted">正在生成总结...</p>
-      </div>
-    )
-  }
-
-  if (digest.status === 'failed') {
-    return (
-      <div className="text-center py-16">
-        <p className="text-red-400 mb-4">总结生成失败</p>
-        <p className="text-sm text-tx-muted mb-4">{digest.content}</p>
-        <button
-          onClick={onGenerateDigest}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors"
-        >
-          重新生成
-        </button>
+      <div className="flex min-h-[360px] items-center justify-center">
+        <div className={`${sectionCardClass} w-full max-w-2xl px-8 py-12 text-center`}>
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+          <h3 className="mt-5 text-xl font-semibold tracking-[-0.03em] text-tx">{title}</h3>
+          <p className="mt-3 text-sm leading-7 text-tx-faint">正在生成摘要内容，稍后会自动刷新为最新版本。</p>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="space-y-4">
-      {/* 总结头 */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-bold text-tx">{digest.title || `每日总结 — ${digest.date}`}</h3>
-          <p className="text-sm text-tx-muted">
-            包含 {digest.item_count} 条资讯
-            {digest.generated_at && ` · 生成于 ${new Date(digest.generated_at).toLocaleTimeString('zh-CN')}`}
-          </p>
+    <div className="min-h-0 space-y-4">
+      <div className={`${sectionCardClass} p-5`}>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Digest Workspace</div>
+            <h3 className="mt-2 text-[1.55rem] font-semibold tracking-[-0.04em] text-tx">{digest.title || title}</h3>
+            <p className="mt-2 text-sm leading-6 text-tx-muted">{description}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <StatusPill status={digest.status} />
+            <button onClick={onGenerate} className={secondaryButtonClass}>{actionLabel}</button>
+          </div>
         </div>
-        <button
-          onClick={onGenerateDigest}
-          className="text-xs px-3 py-1.5 rounded-lg bg-raised hover:bg-surface text-tx-sub transition-colors"
-        >
-          重新生成
-        </button>
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-tx-muted">
+          <span className="rounded-full border border-bd bg-page/[0.7] px-3 py-1">{digest.date}</span>
+          <span className="rounded-full border border-bd bg-page/[0.7] px-3 py-1">{digest.item_count} 条资讯</span>
+          <span className="rounded-full border border-bd bg-page/[0.7] px-3 py-1">{formatDigestStamp(digest.generated_at)}</span>
+        </div>
+        {digest.status === 'failed' ? <div className="mt-4"><InlineNotice message={digest.content || '摘要生成失败，请稍后重试。'} actionLabel={actionLabel} onAction={onGenerate} /></div> : null}
       </div>
-      {/* Markdown 内容 */}
-      <div className="bg-surface rounded-xl p-6 text-sm leading-relaxed text-tx-sub prose-digest">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            h1: ({ children }) => <h1 className="text-lg font-bold text-tx mt-4 mb-2 first:mt-0">{children}</h1>,
-            h2: ({ children }) => <h2 className="text-base font-semibold text-tx mt-4 mb-2 first:mt-0">{children}</h2>,
-            h3: ({ children }) => <h3 className="text-sm font-semibold text-tx mt-3 mb-1">{children}</h3>,
-            p: ({ children }) => <p className="mb-3 last:mb-0 text-tx-sub leading-relaxed">{children}</p>,
-            ul: ({ children }) => <ul className="list-disc ml-4 space-y-1 mb-3 text-tx-sub">{children}</ul>,
-            ol: ({ children }) => <ol className="list-decimal ml-4 space-y-1 mb-3 text-tx-sub">{children}</ol>,
-            li: ({ children }) => <li className="text-tx-sub pl-1">{children}</li>,
-            strong: ({ children }) => <strong className="font-semibold text-tx">{children}</strong>,
-            blockquote: ({ children }) => <blockquote className="border-l-2 border-blue-500/40 pl-3 italic text-tx-muted my-3">{children}</blockquote>,
-            code: ({ children }) => <code className="bg-raised px-1 py-0.5 rounded text-xs font-mono text-emerald-400">{children}</code>,
-            a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">{children}</a>,
-            hr: () => <hr className="border-bd my-4" />,
-          }}
-        >
-          {digest.content.replace(/^[·•]\s*/gm, '- ')}
-        </ReactMarkdown>
-      </div>
+
+      {digest.status === 'ready' ? (
+        <div className={`${sectionCardClass} min-h-[420px] p-6 lg:p-8`}>
+          <div className={proseClass}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{digest.content.replace(/^[·•]\s*/gm, '- ')}</ReactMarkdown>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
 
-// ---- 历史总结侧边 ----
-function DigestHistory({ digests, selectedId, onSelect }: {
+function DigestHistory({
+  digests,
+  selectedId,
+  onSelect,
+}: {
   digests: NewsDigestData[]
   selectedId: number | null
-  onSelect: (d: NewsDigestData) => void
+  onSelect: (digest: NewsDigestData) => void
 }) {
   if (!digests.length) return null
+
   return (
-    <div className="space-y-1">
-      <h4 className="text-xs text-tx-muted uppercase tracking-wider mb-2 px-1">历史总结</h4>
-      {digests.map((d) => (
-        <button
-          key={d.id}
-          onClick={() => onSelect(d)}
-          className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-            selectedId === d.id ? 'bg-blue-600/20 text-blue-400' : 'text-tx-sub hover:bg-raised'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span>{d.date}</span>
-            {!d.is_read && d.status === 'ready' && (
-              <span className="w-2 h-2 rounded-full bg-blue-400" />
-            )}
-          </div>
-          <p className="text-xs text-tx-muted truncate">{d.item_count} 条 · {d.status === 'ready' ? '已就绪' : d.status}</p>
-        </button>
-      ))}
+    <div className="space-y-2">
+      {digests.map((digest) => {
+        const selected = digest.id === selectedId
+        return (
+          <button
+            key={digest.id}
+            onClick={() => onSelect(digest)}
+            className={`w-full rounded-[1rem] border px-3 py-3 text-left transition ${
+              selected
+                ? 'border-accent/20 bg-accent-soft/[0.82] shadow-float ring-1 ring-accent/10'
+                : 'border-bd bg-surface-elevated/[0.88] hover:border-bd-strong hover:bg-surface-elevated/[0.96]'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm font-medium text-tx-sub">{digest.date}</span>
+              <StatusPill status={digest.status} />
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-xs text-tx-muted">
+              <span>{digest.item_count} 条</span>
+              {!digest.is_read && digest.status === 'ready' ? <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-medium text-white">未读</span> : null}
+            </div>
+          </button>
+        )
+      })}
     </div>
   )
 }
 
-// ---- 主页面 ----
+function NewsDetailPanel({
+  item,
+  onOpenImage,
+  onOpenFallback,
+}: {
+  item: NewsItemData | null
+  onOpenImage: (src: string) => void
+  onOpenFallback: () => void
+}) {
+  if (!item) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+        <div className={`${sectionCardClass} w-full max-w-xl px-8 py-12 text-center`}>
+          <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Reading Pane</div>
+          <div className="mt-5 text-5xl">🗞️</div>
+          <div className="mt-5 text-xl font-medium text-tx-sub">选择一条资讯查看详情</div>
+          <p className="mt-3 text-sm leading-7 text-tx-faint">右侧会显示摘要、原文片段、时间和图片。你也可以直接从这里跳到原始链接。</p>
+          <button onClick={onOpenFallback} className={`${primaryButtonClass} mt-6 px-5 py-3 text-sm`}>
+            打开首条资讯
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const imageUrls = extractImageUrls(item.content)
+  const plainContent = stripImageUrls(item.content)
+  const previewContent = plainContent.length > 5000 ? `${plainContent.slice(0, 5000)}\n\n...(内容过长已截断)` : plainContent
+
+  return (
+    <>
+      <div className="border-b border-bd/70 px-5 py-5">
+        <div className="flex flex-col gap-4">
+          <div>
+            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Reading Pane</div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <TypeBadge type={item.item_type} />
+              {item.source_name ? <SourceBadge name={item.source_name} /> : null}
+            </div>
+            {item.title && item.item_type !== 'tweet' ? <h3 className="mt-3 text-[1.45rem] font-semibold tracking-[-0.04em] text-tx">{item.title}</h3> : null}
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-tx-muted">
+              {item.author ? <span className="rounded-full border border-bd bg-page/[0.7] px-3 py-1">{item.author}</span> : null}
+              {item.published_at ? <span className="rounded-full border border-bd bg-page/[0.7] px-3 py-1">{new Date(item.published_at).toLocaleString('zh-CN')}</span> : null}
+              {!item.is_read ? <span className="rounded-full bg-accent px-3 py-1 font-medium text-white">未读</span> : null}
+            </div>
+          </div>
+
+          {item.original_url ? (
+            <a href={item.original_url} target="_blank" rel="noopener noreferrer" className="inline-flex text-sm font-medium text-accent transition hover:text-accent-strong">
+              查看原文
+            </a>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto bg-page/[0.28] p-5">
+        <div className="space-y-4">
+          {item.summary ? (
+            <div className={`${sectionCardClass} p-5`}>
+              <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">AI Summary</div>
+              <p className="mt-3 whitespace-pre-line text-sm leading-7 text-tx-sub">{item.summary}</p>
+            </div>
+          ) : null}
+
+          {imageUrls.length > 0 ? (
+            <div className={`${sectionCardClass} p-4`}>
+              <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Media</div>
+              <div className="mt-3 grid gap-3">
+                {imageUrls.map((imageUrl, index) => (
+                  <button key={`${imageUrl}-${index}`} type="button" className="overflow-hidden rounded-[1rem] border border-bd bg-page/[0.45] text-left" onClick={() => onOpenImage(imageUrl)}>
+                    <img src={imageUrl} alt="" loading="lazy" className="max-h-80 w-full object-cover transition hover:opacity-90" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className={`${sectionCardClass} p-5`}>
+            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Source Content</div>
+            <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-7 text-tx-sub">{previewContent}</pre>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
 export default function NewsPage() {
   const [tab, setTab] = useState<'cards' | 'today' | 'daily'>('cards')
   const [cols, setCols] = useState<1 | 2 | 3>(2)
   const [items, setItems] = useState<NewsItemData[]>([])
   const [loading, setLoading] = useState(false)
-  const [filterType, setFilterType] = useState<string>('')
-  const [filterDate, setFilterDate] = useState<string>('')
+  const [filterType, setFilterType] = useState('')
+  const [filterDate, setFilterDate] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
-
-  // 模态图片灯箱 (用于详情弹窗中的图片)
   const [modalLightboxSrc, setModalLightboxSrc] = useState<string | null>(null)
-
-  // 总结
-  const [currentDigest, setCurrentDigest] = useState<NewsDigestData | null>(null)   // daily
-  const [todayDigest, setTodayDigest] = useState<NewsDigestData | null>(null)        // today
+  const [currentDigest, setCurrentDigest] = useState<NewsDigestData | null>(null)
+  const [todayDigest, setTodayDigest] = useState<NewsDigestData | null>(null)
   const [allDailyDigests, setAllDailyDigests] = useState<NewsDigestData[]>([])
   const [fetching, setFetching] = useState(false)
-
-  // 详情弹窗
   const [selectedItem, setSelectedItem] = useState<NewsItemData | null>(null)
+  const [itemsError, setItemsError] = useState<string | null>(null)
+  const [digestError, setDigestError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+
+  const dailyPollRef = useRef<number | null>(null)
+  const todayPollRef = useRef<number | null>(null)
+
+  const clearDailyPoll = () => {
+    if (dailyPollRef.current !== null) {
+      window.clearInterval(dailyPollRef.current)
+      dailyPollRef.current = null
+    }
+  }
+
+  const clearTodayPoll = () => {
+    if (todayPollRef.current !== null) {
+      window.clearInterval(todayPollRef.current)
+      todayPollRef.current = null
+    }
+  }
 
   const loadItems = useCallback(async () => {
     setLoading(true)
+    setItemsError(null)
     try {
       const data = await getNewsItems({
         item_type: filterType || undefined,
@@ -360,375 +540,462 @@ export default function NewsPage() {
         page_size: 100,
       })
       setItems(data)
-    } catch (e) {
-      console.error(e)
+      setSelectedItem((previous) => {
+        if (!previous) return previous
+        return data.find((item) => item.id === previous.id) || null
+      })
+    } catch (error) {
+      setItemsError(getErrorMessage(error, '资讯流暂时无法刷新。'))
     } finally {
       setLoading(false)
     }
-  }, [filterType, filterDate])
+  }, [filterDate, filterType])
 
   const loadDigests = useCallback(async () => {
+    setDigestError(null)
     try {
-      const [latestDaily, latestToday, allDaily] = await Promise.all([
+      const [latestDaily, latestToday, dailyList] = await Promise.all([
         getLatestDigest('daily'),
         getLatestDigest('today'),
         getNewsDigests(30, 'daily'),
       ])
       setCurrentDigest(latestDaily)
       setTodayDigest(latestToday)
-      setAllDailyDigests(allDaily)
-    } catch (e) {
-      console.error(e)
+      setAllDailyDigests(dailyList)
+    } catch (error) {
+      setDigestError(getErrorMessage(error, '摘要工作区暂时无法刷新。'))
     }
   }, [])
 
   useEffect(() => {
-    loadItems()
+    void loadItems()
   }, [loadItems])
 
   useEffect(() => {
-    if (tab === 'today' || tab === 'daily') loadDigests()
-  }, [tab, loadDigests])
+    if (tab === 'today' || tab === 'daily') {
+      void loadDigests()
+    }
+  }, [loadDigests, tab])
 
-  // 进入总结Tab时自动标记当前总结为已读
   useEffect(() => {
-    if (tab !== 'daily') return
-    if (!currentDigest || currentDigest.is_read || currentDigest.status !== 'ready') return
+    return () => {
+      clearDailyPoll()
+      clearTodayPoll()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (tab !== 'daily' || !currentDigest || currentDigest.is_read || currentDigest.status !== 'ready') return
+
     markDigestRead(currentDigest.id)
       .then(() => {
-        setCurrentDigest(prev => prev ? { ...prev, is_read: true } : prev)
-        setAllDailyDigests(prev => prev.map(d => d.id === currentDigest.id ? { ...d, is_read: true } : d))
+        setCurrentDigest((previous) => (previous ? { ...previous, is_read: true } : previous))
+        setAllDailyDigests((previous) => previous.map((digest) => (digest.id === currentDigest.id ? { ...digest, is_read: true } : digest)))
       })
       .catch(() => {})
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, currentDigest?.id, currentDigest?.is_read])
+  }, [currentDigest, tab])
 
   const handleFetch = async () => {
+    setActionError(null)
     setFetching(true)
     try {
       await triggerNewsFetch()
-      // 等 3 秒后刷新列表
-      setTimeout(() => {
-        loadItems()
+      window.setTimeout(() => {
+        void loadItems()
         setFetching(false)
       }, 3000)
-    } catch {
+    } catch (error) {
+      setActionError(getErrorMessage(error, '立即抓取失败。'))
       setFetching(false)
     }
   }
 
   const handleGenerateDigest = async () => {
-    setCurrentDigest(prev => prev
-      ? { ...prev, status: 'generating' as const }
-      : { id: 0, date: new Date(Date.now() - 86400000).toISOString().slice(0, 10), digest_type: 'daily', title: '', content: '', status: 'generating' as const, item_count: 0, generated_at: null, is_read: false, created_at: new Date().toISOString() }
+    setActionError(null)
+    clearDailyPoll()
+    setCurrentDigest((previous) =>
+      previous
+        ? { ...previous, status: 'generating' }
+        : {
+            id: 0,
+            date: new Date(Date.now() - 86400000).toISOString().slice(0, 10),
+            digest_type: 'daily',
+            title: '',
+            content: '',
+            status: 'generating',
+            item_count: 0,
+            is_read: false,
+            generated_at: null,
+            created_at: new Date().toISOString(),
+          },
     )
+
     try {
       await triggerDigestGeneration()
-      const poll = setInterval(async () => {
+      dailyPollRef.current = window.setInterval(async () => {
         try {
-          const d = await getLatestDigest('daily')
-          if (d) {
-            setCurrentDigest(d)
-            if (d.status === 'ready' || d.status === 'failed') {
-              clearInterval(poll)
-              loadDigests()
+          const digest = await getLatestDigest('daily')
+          if (digest) {
+            setCurrentDigest(digest)
+            if (digest.status === 'ready' || digest.status === 'failed') {
+              clearDailyPoll()
+              await loadDigests()
             }
           }
-        } catch { clearInterval(poll) }
+        } catch {
+          clearDailyPoll()
+        }
       }, 3000)
-    } catch (e) {
-      console.error(e)
-      setCurrentDigest(prev => prev ? { ...prev, status: 'failed' as const, content: '触发生成失败，请重试' } : null)
+    } catch (error) {
+      setActionError(getErrorMessage(error, '触发每日日报生成失败。'))
+      setCurrentDigest((previous) => (previous ? { ...previous, status: 'failed', content: '触发生成失败，请重试。' } : previous))
     }
   }
 
   const handleGenerateTodayDigest = async () => {
-    setTodayDigest(prev => prev
-      ? { ...prev, status: 'generating' as const }
-      : { id: 0, date: new Date().toISOString().slice(0, 10), digest_type: 'today', title: '', content: '', status: 'generating' as const, item_count: 0, generated_at: null, is_read: false, created_at: new Date().toISOString() }
+    setActionError(null)
+    clearTodayPoll()
+    setTodayDigest((previous) =>
+      previous
+        ? { ...previous, status: 'generating' }
+        : {
+            id: 0,
+            date: new Date().toISOString().slice(0, 10),
+            digest_type: 'today',
+            title: '',
+            content: '',
+            status: 'generating',
+            item_count: 0,
+            is_read: false,
+            generated_at: null,
+            created_at: new Date().toISOString(),
+          },
     )
+
     try {
       await triggerTodayDigestGeneration()
-      const poll = setInterval(async () => {
+      todayPollRef.current = window.setInterval(async () => {
         try {
-          const d = await getLatestDigest('today')
-          if (d) {
-            setTodayDigest(d)
-            if (d.status === 'ready' || d.status === 'failed') {
-              clearInterval(poll)
+          const digest = await getLatestDigest('today')
+          if (digest) {
+            setTodayDigest(digest)
+            if (digest.status === 'ready' || digest.status === 'failed') {
+              clearTodayPoll()
             }
           }
-        } catch { clearInterval(poll) }
+        } catch {
+          clearTodayPoll()
+        }
       }, 3000)
-    } catch (e) {
-      console.error(e)
-      setTodayDigest(prev => prev ? { ...prev, status: 'failed' as const, content: '触发生成失败，请重试' } : null)
+    } catch (error) {
+      setActionError(getErrorMessage(error, '触发今日速览生成失败。'))
+      setTodayDigest((previous) => (previous ? { ...previous, status: 'failed', content: '触发生成失败，请重试。' } : previous))
     }
   }
 
   const handleCardClick = async (item: NewsItemData) => {
+    setActionError(null)
     setSelectedItem(item)
-    if (!item.is_read) {
+    if (item.is_read) return
+    try {
       await markNewsItemRead(item.id)
-      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, is_read: true } : i)))
+      setItems((previous) => previous.map((entry) => (entry.id === item.id ? { ...entry, is_read: true } : entry)))
+      setSelectedItem((previous) => (previous && previous.id === item.id ? { ...previous, is_read: true } : previous))
+    } catch (error) {
+      setActionError(getErrorMessage(error, '标记资讯已读失败。'))
     }
   }
 
+  const handleSelectDigest = async (digest: NewsDigestData) => {
+    setActionError(null)
+    setCurrentDigest(digest)
+    if (digest.is_read || digest.status !== 'ready') return
+    try {
+      await markDigestRead(digest.id)
+      setCurrentDigest((previous) => (previous ? { ...previous, is_read: true } : previous))
+      setAllDailyDigests((previous) => previous.map((entry) => (entry.id === digest.id ? { ...entry, is_read: true } : entry)))
+    } catch (error) {
+      setActionError(getErrorMessage(error, '更新日报已读状态失败。'))
+    }
+  }
+
+  const unreadCount = items.filter((item) => !item.is_read).length
+  const sourceCount = new Set(items.map((item) => item.source_name).filter(Boolean)).size
+  const activeDigest = tab === 'today' ? todayDigest : currentDigest
+  const firstUnreadItem = items.find((item) => !item.is_read) || items[0] || null
+
   return (
-    <div className="p-4 md:p-6 h-full flex flex-col">
-      {/* 头部 */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <h2 className="text-2xl font-bold text-tx">📰 新闻</h2>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleFetch}
-            disabled={fetching}
-            className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
-          >
-            {fetching ? '抓取中...' : '立即抓取'}
-          </button>
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="px-3 py-1.5 text-sm rounded-lg bg-raised text-tx-sub hover:bg-surface transition-colors"
-          >
-            ⚙️ 设置
-          </button>
+    <div className="flex h-full min-h-0 flex-col gap-4 p-4 lg:p-6 xl:grid xl:grid-cols-[310px_minmax(0,1.15fr)_minmax(320px,0.9fr)]" onClick={() => setActionError(null)}>
+      {actionError ? (
+        <div className="xl:col-span-3" onClick={(event) => event.stopPropagation()}>
+          <InlineNotice message={actionError} actionLabel="关闭" onAction={() => setActionError(null)} />
         </div>
-      </div>
+      ) : null}
 
-      {/* Tab 切换 */}
-      <div className="flex gap-1 bg-raised rounded-lg p-1 w-fit mb-4">
-        <button
-          onClick={() => setTab('cards')}
-          className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-            tab === 'cards' ? 'bg-surface text-tx font-medium shadow-sm' : 'text-tx-sub hover:text-tx'
-          }`}
-        >
-          卡片浏览
-        </button>
-        <button
-          onClick={() => setTab('today')}
-          className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-            tab === 'today' ? 'bg-surface text-tx font-medium shadow-sm' : 'text-tx-sub hover:text-tx'
-          }`}
-        >
-          今日速览
-        </button>
-        <button
-          onClick={() => setTab('daily')}
-          className={`px-4 py-1.5 text-sm rounded-md transition-colors relative ${
-            tab === 'daily' ? 'bg-surface text-tx font-medium shadow-sm' : 'text-tx-sub hover:text-tx'
-          }`}
-        >
-          每日日报
-          {currentDigest && !currentDigest.is_read && currentDigest.status === 'ready' && (
-            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500" />
-          )}
-        </button>
-      </div>
-
-      {/* 卡片浏览 Tab */}
-      {tab === 'cards' && (
-        <div className="flex-1 overflow-auto">
-          {/* 筛选栏 */}
-          <div className="flex flex-wrap items-center gap-2 mb-4">
-            <input
-              type="date"
-              value={filterDate}
-              onChange={(e) => setFilterDate(e.target.value)}
-              className="px-3 py-1.5 text-sm bg-raised border border-bd rounded-lg focus:border-blue-500 outline-none"
-            />
-            <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-              className="px-3 py-1.5 text-sm bg-raised border border-bd rounded-lg focus:border-blue-500 outline-none"
-            >
-              <option value="">全部类型</option>
-              <option value="tweet">X/Twitter</option>
-              <option value="blog_post">博客</option>
-              <option value="podcast">播客</option>
-              <option value="article">文章</option>
-            </select>
-            {/* 列数切换 */}
-            <div className="flex items-center gap-1 ml-auto">
-              {([1, 2, 3] as const).map(n => (
-                <button
-                  key={n}
-                  onClick={() => setCols(n)}
-                  title={`${n} 列`}
-                  className={`w-7 h-7 rounded flex items-center justify-center transition-colors ${
-                    cols === n ? 'bg-blue-600 text-white' : 'bg-raised text-tx-muted hover:bg-surface border border-bd'
-                  }`}
-                >
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-                    {n === 1 && <rect x="2" y="2" width="10" height="10" rx="1" />}
-                    {n === 2 && (<><rect x="1" y="2" width="5" height="10" rx="1" /><rect x="8" y="2" width="5" height="10" rx="1" /></>)}
-                    {n === 3 && (<><rect x="1" y="2" width="3" height="10" rx="1" /><rect x="5.5" y="2" width="3" height="10" rx="1" /><rect x="10" y="2" width="3" height="10" rx="1" /></>)}
-                  </svg>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {loading ? (
-            <div className="text-center py-16 text-tx-muted">加载中...</div>
-          ) : items.length === 0 ? (
-            <div className="text-center py-16">
-              <p className="text-tx-muted mb-4">暂无新闻</p>
-              <p className="text-sm text-tx-muted">请先添加信息源或点击 "立即抓取"</p>
-            </div>
-          ) : (
-            <div className={`grid gap-4 ${
-              cols === 1 ? 'grid-cols-1' :
-              cols === 2 ? 'grid-cols-1 md:grid-cols-2' :
-              'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
-            }`}>
-              {items.map((item) => (
-                <NewsCard key={item.id} item={item} cols={cols} onClick={() => handleCardClick(item)} />
-              ))}
-            </div>
-          )}
+      <section className={`flex min-h-[360px] flex-col overflow-hidden ${shellPanelClass}`}>
+        <div className="border-b border-bd/70 px-5 py-5">
+          <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">News Desk</div>
+          <h2 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-tx">新闻工作区</h2>
+          <p className="mt-2 text-sm leading-6 text-tx-muted">把资讯抓取、每日摘要和阅读动线收进同一条信息流主线上。</p>
         </div>
-      )}
 
-      {/* 今日速览 Tab */}
-      {tab === 'today' && (
-        <div className="flex-1 overflow-auto">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-base font-semibold text-tx">📅 今日速览</h3>
-            <button
-              onClick={handleGenerateTodayDigest}
-              disabled={todayDigest?.status === 'generating'}
-              className="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
-            >
-              {todayDigest?.status === 'generating' ? '生成中...' : '抓取并生成今日速览'}
-            </button>
-          </div>
-          {!todayDigest ? (
-            <div className="bg-surface rounded-xl p-10 text-center text-tx-muted text-sm">
-              点击右上角按钮，抓取今日最新消息并生成速览
-            </div>
-          ) : todayDigest.status === 'generating' ? (
-            <div className="bg-surface rounded-xl p-10 text-center">
-              <div className="inline-block w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mb-2" />
-              <p className="text-tx-muted text-sm">正在抓取并生成今日速览...</p>
-            </div>
-          ) : (
-            <>
-              <p className="text-xs text-tx-muted mb-3">
-                {todayDigest.item_count} 条资讯
-                {todayDigest.generated_at && ` · 生成于 ${new Date(todayDigest.generated_at).toLocaleTimeString('zh-CN')}`}
-              </p>
-              <DigestView digest={todayDigest} onGenerateDigest={handleGenerateTodayDigest} />
-            </>
-          )}
-        </div>
-      )}
-
-      {/* 每日日报 Tab */}
-      {tab === 'daily' && (
-        <div className="flex-1 overflow-auto flex gap-6">
-          <div className="flex-1">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-semibold text-tx">📰 每日日报（自动生成）</h3>
-              <button
-                onClick={handleGenerateDigest}
-                disabled={currentDigest?.status === 'generating'}
-                className="text-xs px-3 py-1.5 rounded-lg bg-raised text-tx-sub hover:bg-surface disabled:opacity-50 transition-colors"
-              >
-                {currentDigest?.status === 'generating' ? '生成中...' : '重新生成昨日日报'}
+        <div className="space-y-4 p-4">
+          <div className={`${sectionCardClass} p-4`}>
+            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Controls</div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button onClick={() => void handleFetch()} disabled={fetching} className={`${primaryButtonClass} text-sm`}>
+                {fetching ? '抓取中...' : '立即抓取'}
+              </button>
+              <button onClick={() => setSettingsOpen(true)} className={`${secondaryButtonClass} text-sm`}>
+                设置
               </button>
             </div>
-            <DigestView digest={currentDigest} onGenerateDigest={handleGenerateDigest} />
           </div>
-          {allDailyDigests.length > 1 && (
-            <div className="w-48 shrink-0 overflow-auto">
-              <DigestHistory
-                digests={allDailyDigests}
-                selectedId={currentDigest?.id ?? null}
-                onSelect={async (d) => {
-                  setCurrentDigest(d)
-                  if (!d.is_read && d.status === 'ready') {
-                    await markDigestRead(d.id)
-                    setAllDailyDigests((prev) => prev.map((x) => (x.id === d.id ? { ...x, is_read: true } : x)))
-                  }
-                }}
+
+          <div className="grid grid-cols-2 gap-3">
+            <StatCard label="资讯总数" value={`${items.length}`} detail="当前筛选条件下的返回结果。" />
+            <StatCard label="未读资讯" value={`${unreadCount}`} detail="点击卡片后会自动进入已读。" />
+            <StatCard label="来源数量" value={`${sourceCount}`} detail="帮助判断信息流覆盖面。" />
+            <StatCard
+              label="摘要状态"
+              value={activeDigest?.status === 'ready' ? '就绪' : activeDigest?.status === 'generating' ? '生成中' : activeDigest?.status === 'failed' ? '失败' : '空'}
+              detail={tab === 'today' ? '当前查看的是今日速览。' : '当前查看的是每日日报。'}
+            />
+          </div>
+
+          <div className={`${sectionCardClass} p-3`}>
+            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Modes</div>
+            <div className="mt-3 grid gap-2">
+              {[
+                { id: 'cards', label: '卡片浏览', detail: '快速扫读资讯流' },
+                { id: 'today', label: '今日速览', detail: '聚焦当天更新' },
+                { id: 'daily', label: '每日日报', detail: '查看沉淀摘要' },
+              ].map((entry) => {
+                const active = tab === entry.id
+                return (
+                  <button
+                    key={entry.id}
+                    onClick={() => setTab(entry.id as 'cards' | 'today' | 'daily')}
+                    className={`rounded-[1rem] border px-3 py-3 text-left transition ${
+                      active
+                        ? 'border-accent/20 bg-accent-soft/[0.82] shadow-float ring-1 ring-accent/10'
+                        : 'border-bd bg-surface-elevated/[0.88] hover:border-bd-strong hover:bg-surface-elevated/[0.96]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-tx-sub">{entry.label}</div>
+                        <div className="mt-1 text-xs text-tx-muted">{entry.detail}</div>
+                      </div>
+                      {entry.id === 'daily' && currentDigest && !currentDigest.is_read && currentDigest.status === 'ready' ? <span className="rounded-full bg-accent px-2 py-1 text-[10px] font-medium text-white">新</span> : null}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className={`${sectionCardClass} p-4`}>
+            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Filters</div>
+            <div className="mt-3 space-y-3">
+              <input type="date" value={filterDate} onChange={(event) => setFilterDate(event.target.value)} className={fieldClass} />
+              <select value={filterType} onChange={(event) => setFilterType(event.target.value)} className={fieldClass}>
+                <option value="">全部类型</option>
+                <option value="tweet">X/Twitter</option>
+                <option value="blog_post">博客</option>
+                <option value="podcast">播客</option>
+                <option value="article">文章</option>
+              </select>
+              {tab === 'cards' ? (
+                <div className="grid grid-cols-3 gap-2">
+                  {([1, 2, 3] as const).map((value) => (
+                    <button
+                      key={value}
+                      onClick={() => setCols(value)}
+                      className={cols === value ? primaryButtonClass : secondaryButtonClass}
+                    >
+                      {value} 列
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs leading-6 text-tx-muted">摘要模式会继续沿用这里的资讯筛选作为阅读上下文，但主要内容来自摘要任务。</p>
+              )}
+            </div>
+          </div>
+
+          {tab === 'daily' && allDailyDigests.length > 1 ? (
+            <div className={`${sectionCardClass} p-3`}>
+              <div className="px-1 pb-3 text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Archive</div>
+              <DigestHistory digests={allDailyDigests} selectedId={currentDigest?.id ?? null} onSelect={(digest) => void handleSelectDigest(digest)} />
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className={`flex min-h-[420px] min-w-0 flex-col overflow-hidden ${shellPanelClass}`}>
+        <div className="border-b border-bd/70 px-5 py-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Workspace</div>
+              <h2 className="mt-2 text-[1.55rem] font-semibold tracking-[-0.04em] text-tx">
+                {tab === 'cards' ? '资讯流' : tab === 'today' ? '今日速览' : '每日日报'}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-tx-muted">
+                {tab === 'cards'
+                  ? '在中间浏览资讯卡片，右侧阅读细节。'
+                  : tab === 'today'
+                    ? '围绕今天的新资讯生成即时摘要。'
+                    : '聚合昨天的重要信息，形成稳定的日报视图。'}
+              </p>
+            </div>
+
+            {tab === 'today' ? (
+              <button onClick={() => void handleGenerateTodayDigest()} disabled={todayDigest?.status === 'generating'} className={primaryButtonClass}>
+                {todayDigest?.status === 'generating' ? '生成中...' : '生成今日速览'}
+              </button>
+            ) : tab === 'daily' ? (
+              <button onClick={() => void handleGenerateDigest()} disabled={currentDigest?.status === 'generating'} className={secondaryButtonClass}>
+                {currentDigest?.status === 'generating' ? '生成中...' : '重新生成日报'}
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto px-4 pb-4 pt-3">
+          {tab === 'cards' ? (
+            <div className="space-y-4">
+              {itemsError ? <InlineNotice message={`资讯流刷新失败：${itemsError}`} actionLabel="重试" onAction={() => void loadItems()} /> : null}
+              {loading ? (
+                <div className="rounded-[1.2rem] border border-bd bg-page/[0.55] px-4 py-8 text-center text-sm text-tx-muted">加载中...</div>
+              ) : items.length === 0 ? (
+                <div className="rounded-[1.2rem] border border-dashed border-bd px-4 py-10 text-center text-sm leading-6 text-tx-faint">
+                  当前筛选下还没有资讯结果。可以先抓取一次，或者放宽日期与类型过滤。
+                </div>
+              ) : (
+                <div
+                  className={`grid gap-4 ${
+                    cols === 1
+                      ? 'grid-cols-1'
+                      : cols === 2
+                        ? 'grid-cols-1 2xl:grid-cols-2'
+                        : 'grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3'
+                  }`}
+                >
+                  {items.map((item) => (
+                    <NewsCard
+                      key={item.id}
+                      item={item}
+                      cols={cols}
+                      selected={selectedItem?.id === item.id}
+                      onClick={() => void handleCardClick(item)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {digestError ? <InlineNotice message={`摘要刷新失败：${digestError}`} actionLabel="重试" onAction={() => void loadDigests()} /> : null}
+              <DigestView
+                digest={tab === 'today' ? todayDigest : currentDigest}
+                title={tab === 'today' ? '今日速览' : '每日日报'}
+                description={tab === 'today' ? '把当天抓到的新资讯收束成一段即时阅读摘要。' : '把前一天的重要信号压缩成日报，方便集中阅读。'}
+                emptyLabel={tab === 'today' ? '还没有今日速览' : '还没有每日日报'}
+                emptyDescription={tab === 'today' ? '点击下方按钮抓取最新消息并生成今天的速览。' : '点击下方按钮生成昨日日报，形成稳定的沉淀视图。'}
+                actionLabel={tab === 'today' ? '生成今日速览' : '生成每日日报'}
+                onGenerate={tab === 'today' ? () => void handleGenerateTodayDigest() : () => void handleGenerateDigest()}
               />
             </div>
           )}
         </div>
-      )}
+      </section>
 
-      {/* 详情弹窗 */}
-      {selectedItem && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setSelectedItem(null)}>
-          <div
-            className="bg-surface rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-auto p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2 flex-wrap">
-                <TypeBadge type={selectedItem.item_type} />
-                {selectedItem.source_name && <SourceBadge name={selectedItem.source_name} />}
-                <span className="text-sm text-tx-muted">{selectedItem.author}</span>
-              </div>
-              <button onClick={() => setSelectedItem(null)} className="text-tx-muted hover:text-tx text-xl">×</button>
-            </div>
-            {selectedItem.title && selectedItem.item_type !== 'tweet' && (
-              <h2 className="text-xl font-bold text-tx mb-3">{selectedItem.title}</h2>
-            )}
-            <p className="text-xs text-tx-muted mb-4">
-              {selectedItem.published_at && new Date(selectedItem.published_at).toLocaleString('zh-CN')}
-            </p>
-
-            {/* 图片画廊 */}
-            {extractImageUrls(selectedItem.content).map((imgUrl, idx) => (
-              <div key={idx} className="mb-3 rounded-lg overflow-hidden">
-                <img
-                  src={imgUrl}
-                  alt=""
-                  loading="lazy"
-                  className="w-full rounded-lg cursor-zoom-in hover:opacity-90 transition-opacity max-h-80 object-cover"
-                  onClick={() => setModalLightboxSrc(imgUrl)}
-                />
-              </div>
-            ))}
-
-            {/* 摘要 */}
-            {selectedItem.summary && (
-              <div className="bg-raised rounded-lg p-4 mb-4">
-                <h4 className="text-xs font-medium text-tx-muted mb-2 uppercase tracking-wider">AI 摘要</h4>
-                <p className="text-sm text-tx-sub leading-relaxed whitespace-pre-line">{selectedItem.summary}</p>
-              </div>
-            )}
-
-            {/* 原文 */}
-            <div className="text-sm text-tx-sub leading-relaxed whitespace-pre-line">
-              {(() => {
-                const text = stripImageUrls(selectedItem.content)
-                return text.length > 5000 ? text.slice(0, 5000) + '\n\n...(内容过长已截断)' : text
-              })()}
+      <section className={`flex min-h-[420px] min-w-0 flex-col overflow-hidden ${shellPanelClass}`}>
+        {tab === 'cards' ? (
+          <NewsDetailPanel
+            item={selectedItem}
+            onOpenImage={(src) => setModalLightboxSrc(src)}
+            onOpenFallback={() => {
+              if (firstUnreadItem) {
+                void handleCardClick(firstUnreadItem)
+              }
+            }}
+          />
+        ) : (
+          <>
+            <div className="border-b border-bd/70 px-5 py-5">
+              <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Side Notes</div>
+              <h3 className="mt-2 text-[1.45rem] font-semibold tracking-[-0.04em] text-tx">{tab === 'today' ? '摘要侧栏' : '日报侧栏'}</h3>
+              <p className="mt-2 text-sm leading-6 text-tx-muted">这里保留生成状态、补充说明以及历史摘要切换，不占用主阅读区。</p>
             </div>
 
-            {selectedItem.original_url && (
-              <a
-                href={selectedItem.original_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-block mt-4 text-sm text-blue-400 hover:text-blue-300"
-              >
-                查看原文 →
-              </a>
-            )}
-          </div>
-        </div>
-      )}
+            <div className="min-h-0 flex-1 overflow-auto bg-page/[0.28] p-5">
+              <div className="space-y-4">
+                <div className={`${sectionCardClass} p-5`}>
+                  <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Digest Status</div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <StatusPill status={activeDigest?.status || 'idle'} />
+                    {activeDigest?.generated_at ? <span className="rounded-full border border-bd bg-page/[0.7] px-3 py-1 text-xs text-tx-muted">{formatDigestStamp(activeDigest.generated_at)}</span> : null}
+                  </div>
+                  <p className="mt-3 text-sm leading-7 text-tx-muted">
+                    {tab === 'today'
+                      ? '今日速览适合在抓取后快速扫读最新信息，然后再回到卡片流查看原文。'
+                      : '每日日报更适合做完整复盘，切换左侧归档可以比较不同日期的沉淀内容。'}
+                  </p>
+                </div>
 
-      {/* 模态灯箱 (详情弹窗中的图片) */}
-      {modalLightboxSrc && <ImageLightbox src={modalLightboxSrc} onClose={() => setModalLightboxSrc(null)} />}
+                <div className={`${sectionCardClass} p-5`}>
+                  <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Quick Actions</div>
+                  <div className="mt-3 grid gap-2">
+                    <button onClick={tab === 'today' ? () => void handleGenerateTodayDigest() : () => void handleGenerateDigest()} className={primaryButtonClass}>
+                      {tab === 'today' ? '重新生成今日速览' : '重新生成每日日报'}
+                    </button>
+                    <button onClick={() => setTab('cards')} className={secondaryButtonClass}>返回卡片浏览</button>
+                    <button onClick={() => setSettingsOpen(true)} className={secondaryButtonClass}>打开设置</button>
+                  </div>
+                </div>
 
-      {/* 设置弹窗 */}
-      {settingsOpen && <NewsSettingsDialog onClose={() => { setSettingsOpen(false); loadItems() }} />}
+                {tab === 'daily' && allDailyDigests.length > 0 ? (
+                  <div className={`${sectionCardClass} p-4`}>
+                    <div className="pb-3 text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">History</div>
+                    <DigestHistory digests={allDailyDigests} selectedId={currentDigest?.id ?? null} onSelect={(digest) => void handleSelectDigest(digest)} />
+                  </div>
+                ) : null}
+
+                {tab === 'today' ? (
+                  <div className={`${sectionCardClass} p-4`}>
+                    <div className="pb-3 text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Latest Signals</div>
+                    <div className="space-y-3">
+                      {items.slice(0, 3).map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            setTab('cards')
+                            void handleCardClick(item)
+                          }}
+                          className="w-full rounded-[1rem] border border-bd bg-surface-elevated/[0.88] px-3 py-3 text-left transition hover:border-bd-strong hover:bg-surface-elevated/[0.96]"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="truncate text-sm font-medium text-tx-sub">{item.title || item.author || '(无标题)'}</span>
+                            <span className="shrink-0 text-xs text-tx-faint">{formatTime(item.published_at)}</span>
+                          </div>
+                          <p className="mt-2 line-clamp-2 text-xs leading-6 text-tx-muted">{(item.summary || stripImageUrls(item.content)).trim()}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </>
+        )}
+      </section>
+
+      {modalLightboxSrc ? <ImageLightbox src={modalLightboxSrc} onClose={() => setModalLightboxSrc(null)} /> : null}
+
+      {settingsOpen ? <NewsSettingsDialog onClose={() => { setSettingsOpen(false); void loadItems(); void loadDigests() }} /> : null}
     </div>
   )
 }
