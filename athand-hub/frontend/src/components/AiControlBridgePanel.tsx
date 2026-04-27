@@ -632,7 +632,7 @@ export default function AiControlBridgePanel() {
             </div>
           ) : (
             <>
-              <div className="space-y-5 p-5">
+              <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-5">
                 <div className={`${sectionCardClass} p-4`}>
                   <div className="flex items-start justify-between gap-3">
                     <div>

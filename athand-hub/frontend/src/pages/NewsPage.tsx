@@ -739,7 +739,7 @@ export default function NewsPage() {
           <p className="mt-2 text-sm leading-6 text-tx-muted">把资讯抓取、每日摘要和阅读动线收进同一条信息流主线上。</p>
         </div>
 
-        <div className="space-y-4 p-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
           <div className={`${sectionCardClass} p-4`}>
             <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Controls</div>
             <div className="mt-3 grid grid-cols-2 gap-2">

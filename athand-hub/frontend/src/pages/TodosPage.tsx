@@ -462,7 +462,7 @@ export default function TodosPage() {
           <p className="mt-2 text-sm leading-6 text-tx-muted">把智能视图、自定义列表和今日焦点收进同一套清爽骨架里。</p>
         </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto p-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
           <div className={`${sectionCardClass} p-3`}>
             <div className="mb-2 px-1 text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Smart Views</div>
             <div className="space-y-1.5">

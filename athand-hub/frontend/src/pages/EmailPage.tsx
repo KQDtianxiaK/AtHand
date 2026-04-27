@@ -482,7 +482,7 @@ export default function EmailPage() {
           <p className="mt-2 text-sm leading-6 text-tx-muted">把账号、文件夹、收件同步和联系人管理收进同一条邮件控制主线里。</p>
         </div>
 
-        <div className="space-y-4 p-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
           <div className={`${sectionCardClass} p-4`}>
             <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-tx-faint">Account</div>
             <select

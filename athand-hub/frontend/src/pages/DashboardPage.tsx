@@ -1,8 +1,21 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { DailyWorkHours, getStats, StatsOverview, getNewsStats, type NewsStats } from '../api/client'
 
 const panelClassName = 'rounded-[1.75rem] border border-bd bg-surface/[0.88] shadow-ambient backdrop-blur-xl'
+
+function InlineNotice({ message, actionLabel, onAction }: { message: string; actionLabel?: string; onAction?: () => void }) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-[1rem] border border-danger/20 bg-danger/10 px-3 py-2.5 text-xs leading-6 text-danger">
+      <span className="min-w-0 flex-1">{message}</span>
+      {actionLabel && onAction ? (
+        <button onClick={onAction} className="shrink-0 rounded-full border border-danger/25 px-2.5 py-1 font-medium transition hover:bg-danger/10">
+          {actionLabel}
+        </button>
+      ) : null}
+    </div>
+  )
+}
 
 // ---- 分段堆叠柱状图 ----
 function SegmentedBarChart({ data }: { data: DailyWorkHours[] }) {
@@ -97,17 +110,70 @@ function LineChart({ data }: { data: DailyWorkHours[] }) {
 export default function DashboardPage() {
   const [stats, setStats] = useState<StatsOverview | null>(null)
   const [newsStats, setNewsStats] = useState<NewsStats | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [statsError, setStatsError] = useState<string | null>(null)
+  const [newsStatsError, setNewsStatsError] = useState<string | null>(null)
   const navigate = useNavigate()
 
-  useEffect(() => {
-    getStats(7).then(setStats).catch(console.error)
-    getNewsStats().then(setNewsStats).catch(console.error)
+  const loadDashboard = useCallback(async () => {
+    setLoading(true)
+    setStatsError(null)
+    setNewsStatsError(null)
+
+    const [statsResult, newsResult] = await Promise.allSettled([getStats(7), getNewsStats()])
+
+    if (statsResult.status === 'fulfilled') {
+      setStats(statsResult.value)
+    } else {
+      setStats(null)
+      setStatsError(statsResult.reason instanceof Error ? statsResult.reason.message : '仪表盘统计暂时不可用。')
+    }
+
+    if (newsResult.status === 'fulfilled') {
+      setNewsStats(newsResult.value)
+    } else {
+      setNewsStats(null)
+      setNewsStatsError(newsResult.reason instanceof Error ? newsResult.reason.message : '新闻统计暂时不可用。')
+    }
+
+    setLoading(false)
   }, [])
 
-  if (!stats) return <div className="p-6 text-tx-muted">加载中...</div>
+  useEffect(() => {
+    void loadDashboard()
+  }, [loadDashboard])
+
+  if (loading) {
+    return <div className="p-6 text-tx-muted">加载中...</div>
+  }
+
+  if (!stats) {
+    return (
+      <div className="p-6 lg:p-8">
+        <div className={`${panelClassName} mx-auto max-w-3xl px-8 py-12 text-center`}>
+          <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-tx-faint">Desk Overview</div>
+          <div className="mt-5 text-5xl">⚠️</div>
+          <h2 className="mt-5 text-[1.9rem] font-semibold tracking-[-0.04em] text-tx">仪表盘统计暂时不可用</h2>
+          <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-tx-muted">
+            {statsError || '当前无法读取会话与工时统计。你可以稍后重试，或者先切换到其他工作台继续使用。'}
+          </p>
+          <div className="mt-7 flex justify-center gap-3">
+            <button onClick={() => void loadDashboard()} className="rounded-[1rem] bg-accent px-5 py-3 text-sm font-medium text-white transition hover:bg-accent-strong">
+              重试加载
+            </button>
+            <button onClick={() => navigate('/news')} className="rounded-[1rem] border border-bd bg-page/[0.55] px-5 py-3 text-sm font-medium text-tx-sub transition hover:border-bd-strong hover:bg-surface-elevated/[0.92]">
+              先去新闻页
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6 p-6 lg:p-8">
+      {newsStatsError ? <InlineNotice message={`新闻统计刷新失败：${newsStatsError}`} actionLabel="重试" onAction={() => void loadDashboard()} /> : null}
+
       <section className={`${panelClassName} overflow-hidden`}>
         <div className="flex flex-col gap-6 px-6 py-6 lg:flex-row lg:items-end lg:justify-between lg:px-8 lg:py-8">
           <div className="max-w-2xl">

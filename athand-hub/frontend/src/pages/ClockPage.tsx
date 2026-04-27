@@ -357,7 +357,7 @@ export default function ClockPage() {
           </div>
         </div>
 
-        <div className="space-y-4 p-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
           <div className="grid grid-cols-2 gap-3">
             <StatCard label="今日工时" value={`${todayTotal.toFixed(1)}h`} detail="实时汇总今日完成的所有时段。" />
             <StatCard label="本周工时" value={`${weekTotal.toFixed(1)}h`} detail="按本周一开始累计当前周数据。" />
