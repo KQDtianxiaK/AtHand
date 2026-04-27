@@ -1,45 +1,104 @@
 from __future__ import annotations
 
+import logging
 import datetime as dt
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from api.auth import get_current_user
 from database import get_db
-from models import ClockRecord, Task
+from models import ClockRecord, Machine
+from services.ai_control_bridge import bridge_service
+
+logger = logging.getLogger("api.stats")
+
+DONE_STATUSES = {"done", "completed", "cancelled", "canceled", "finished", "stopped", "closed", "archived"}
+ERROR_STATUSES = {"failed", "error", "crashed", "timed_out", "timeout"}
 
 router = APIRouter(prefix="/api/stats", tags=["stats"], dependencies=[Depends(get_current_user)])
 
 
-@router.get("/overview")
-def overview(days: int = 7, db: Session = Depends(get_db)):
+def _normalize_status(value: str | None) -> str:
+    return (value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _deduped_history_representative_machine_ids(db: Session) -> list[str]:
+    machine_ids: list[str] = []
+    seen_daemon_urls: set[str] = set()
+    machines = db.query(Machine).order_by(Machine.name).all()
+    for machine in machines:
+        daemon_url = bridge_service._daemon_url_for_machine(machine.id)
+        if not daemon_url or daemon_url in seen_daemon_urls:
+            continue
+        seen_daemon_urls.add(daemon_url)
+        machine_ids.append(machine.id)
+    return machine_ids
+
+
+def _collect_deduped_bridge_history(db: Session) -> list:
+    items_by_agent_id = {}
+
+    for machine_id in _deduped_history_representative_machine_ids(db):
+        cursor: str | None = None
+        page_count = 0
+
+        while True:
+            try:
+                response = bridge_service.get_history(
+                    machine_id=machine_id,
+                    provider=None,
+                    status=None,
+                    cursor=cursor,
+                    limit=200,
+                    db=db,
+                )
+            except Exception as exc:
+                logger.warning("Failed to fetch bridge history for stats", exc_info=exc)
+                break
+
+            for item in response.items:
+                existing = items_by_agent_id.get(item.agent_id)
+                if existing is None or item.updated_at > existing.updated_at:
+                    items_by_agent_id[item.agent_id] = item
+
+            if not response.next_cursor:
+                break
+
+            cursor = response.next_cursor
+            page_count += 1
+            if page_count >= 100:
+                logger.warning("Stats bridge history pagination hit page cap", extra={"machine_id": machine_id})
+                break
+
+    return list(items_by_agent_id.values())
+
+
+def _is_done(item) -> bool:
+    if item.attention_reason == "error":
+        return False
+    return item.attention_reason == "finished" or _normalize_status(item.status) in DONE_STATUSES
+
+
+def _is_failed(item) -> bool:
+    return item.attention_reason == "error" or _normalize_status(item.status) in ERROR_STATUSES
+
+
+def build_stats_overview(days: int, db: Session):
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+    history_items = _collect_deduped_bridge_history(db)
+    recent_items = [item for item in history_items if item.created_at >= since]
 
-    total_tasks = db.query(func.count(Task.id)).filter(Task.created_at >= since).scalar()
-    done_tasks = db.query(func.count(Task.id)).filter(
-        Task.created_at >= since, Task.status == "done"
-    ).scalar()
-    failed_tasks = db.query(func.count(Task.id)).filter(
-        Task.created_at >= since, Task.status == "failed"
-    ).scalar()
+    total_sessions = len(recent_items)
+    done_sessions = sum(1 for item in recent_items if _is_done(item))
+    failed_sessions = sum(1 for item in recent_items if _is_failed(item))
 
-    # 每日任务数
-    daily_tasks = (
-        db.query(func.date(Task.created_at).label("day"), func.count(Task.id).label("count"))
-        .filter(Task.created_at >= since)
-        .group_by(func.date(Task.created_at))
-        .all()
-    )
-
-    # 各机器任务数
-    machine_tasks = (
-        db.query(Task.machine_id, func.count(Task.id).label("count"))
-        .filter(Task.created_at >= since)
-        .group_by(Task.machine_id)
-        .all()
-    )
+    daily_session_counts: dict[str, int] = defaultdict(int)
+    machine_session_counts: dict[str, int] = defaultdict(int)
+    for item in recent_items:
+        daily_session_counts[str(item.created_at.date())] += 1
+        machine_session_counts[item.machine_id] += 1
 
     # 工时统计（含分段）
     clock_records = (
@@ -77,12 +136,23 @@ def overview(days: int = 7, db: Session = Depends(get_db)):
         })
 
     return {
-        "total_tasks": total_tasks,
-        "done_tasks": done_tasks,
-        "failed_tasks": failed_tasks,
-        "success_rate": round(done_tasks / total_tasks * 100, 1) if total_tasks else 0,
-        "daily_tasks": [{"day": str(d.day), "count": d.count} for d in daily_tasks],
-        "machine_tasks": [{"machine_id": m.machine_id, "count": m.count} for m in machine_tasks],
+        "total_sessions": total_sessions,
+        "done_sessions": done_sessions,
+        "failed_sessions": failed_sessions,
+        "success_rate": round(done_sessions / total_sessions * 100, 1) if total_sessions else 0,
+        "daily_sessions": [
+            {"day": day, "count": count}
+            for day, count in sorted(daily_session_counts.items())
+        ],
+        "machine_sessions": [
+            {"machine_id": machine_id, "count": count}
+            for machine_id, count in sorted(machine_session_counts.items())
+        ],
         "total_work_hours": round(total_hours, 1),
         "daily_work_hours": daily_work_hours,
     }
+
+
+@router.get("/overview")
+def overview(days: int = 7, db: Session = Depends(get_db)):
+    return build_stats_overview(days=days, db=db)

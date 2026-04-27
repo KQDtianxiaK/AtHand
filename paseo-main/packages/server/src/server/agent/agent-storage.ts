@@ -58,6 +58,7 @@ const STORED_AGENT_SCHEMA = z.object({
     .optional(),
   features: z.array(AgentFeatureSchema).optional(),
   persistence: PERSISTENCE_HANDLE_SCHEMA,
+  lastMessage: z.string().nullable().optional(),
   lastError: z.string().nullable().optional(),
   requiresAttention: z.boolean().optional(),
   attentionReason: z.enum(["finished", "error", "permission"]).nullable().optional(),
@@ -187,8 +188,8 @@ export class AgentStorage {
 
   async applySnapshot(
     agent: ManagedAgent,
-    workspaceIdOrOptions?: string | { title?: string | null; internal?: boolean },
-    options?: { title?: string | null; internal?: boolean },
+    workspaceIdOrOptions?: string | { title?: string | null; internal?: boolean; lastMessage?: string | null },
+    options?: { title?: string | null; internal?: boolean; lastMessage?: string | null },
   ): Promise<void> {
     const nextOptions = typeof workspaceIdOrOptions === "string" ? options : workspaceIdOrOptions;
     await this.load();
@@ -198,12 +199,17 @@ export class AgentStorage {
       nextOptions !== undefined && Object.prototype.hasOwnProperty.call(nextOptions, "title");
     const hasInternalOverride =
       nextOptions !== undefined && Object.prototype.hasOwnProperty.call(nextOptions, "internal");
+    const hasLastMessageOverride =
+      nextOptions !== undefined && Object.prototype.hasOwnProperty.call(nextOptions, "lastMessage");
     const record = toStoredAgentRecord(agent, {
       title: hasTitleOverride ? (nextOptions?.title ?? null) : (existing?.title ?? null),
       createdAt: existing?.createdAt,
       internal: hasInternalOverride
         ? nextOptions?.internal
         : (agent.internal ?? existing?.internal),
+      lastMessage: hasLastMessageOverride
+        ? (nextOptions?.lastMessage ?? null)
+        : (existing?.lastMessage ?? null),
     });
 
     // Preserve soft-delete/archive status across snapshot flushes.

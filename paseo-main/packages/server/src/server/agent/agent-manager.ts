@@ -894,8 +894,8 @@ export class AgentManager {
     );
     const closedAgent = this.prepareAgentForClosure(agent, "agent closed");
     await agent.session.close();
-    this.timelineStore.delete(agentId);
     await this.persistSnapshot(closedAgent);
+    this.timelineStore.delete(agentId);
     this.emitClosedAgent(closedAgent, { persist: false });
     this.logger.trace({ agentId }, "closeAgent: completed");
   }
@@ -1736,11 +1736,20 @@ export class AgentManager {
 
   async getLastAssistantMessage(agentId: string): Promise<string | null> {
     const agent = this.agents.get(agentId);
-    if (!agent) {
+    if (agent) {
+      return await this.getLastAssistantMessageFromStores(agentId);
+    }
+
+    const persisted = await this.registry?.get(agentId);
+    if (persisted?.lastMessage) {
+      return persisted.lastMessage;
+    }
+
+    if (!this.durableTimelineStore) {
       return null;
     }
 
-    return await this.getLastAssistantMessageFromStores(agentId);
+    return (await this.durableTimelineStore.getLastAssistantMessage(agentId)) ?? null;
   }
 
   private getLastAssistantMessageFromTimeline(
@@ -1778,7 +1787,7 @@ export class AgentManager {
   }
 
   private async getLastAssistantMessageFromStores(agentId: string): Promise<string | null> {
-    const liveTimeline = this.timelineStore.getItems(agentId);
+    const liveTimeline = this.timelineStore.has(agentId) ? this.timelineStore.getItems(agentId) : [];
     const liveSegment = this.getLastAssistantMessageSegmentFromTimeline(liveTimeline);
     if (!this.durableTimelineStore) {
       return liveSegment?.text ?? null;
@@ -2329,11 +2338,12 @@ export class AgentManager {
     if (agent.internal) {
       return;
     }
+    const lastMessage = await this.getLastAssistantMessageFromStores(agent.id);
     if (options?.workspaceId !== undefined) {
-      await this.registry.applySnapshot(agent, options.workspaceId, options);
+      await this.registry.applySnapshot(agent, options.workspaceId, { ...options, lastMessage });
       return;
     }
-    await this.registry.applySnapshot(agent, options);
+    await this.registry.applySnapshot(agent, { ...options, lastMessage });
   }
 
   private requireRegistry(): AgentStorage {

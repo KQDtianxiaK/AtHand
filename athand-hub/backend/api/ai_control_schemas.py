@@ -109,6 +109,7 @@ class AiControlSessionOut(BaseModel):
     created_at: dt.datetime
     updated_at: dt.datetime
     attention: bool = False
+    attention_reason: str | None = None
     persistence_handle: AiControlPersistenceHandle | None = None
     capabilities: AiControlCapabilitiesOut | None = None
 
@@ -193,12 +194,35 @@ class AiControlHistoryItemOut(BaseModel):
     updated_at: dt.datetime
     last_message_preview: str | None = None
     attention: bool = False
+    attention_reason: str | None = None
     persistence_handle: AiControlPersistenceHandle | None = None
 
 
 class AiControlHistoryResponse(BaseModel):
     items: list[AiControlHistoryItemOut] = Field(default_factory=list)
     next_cursor: str | None = None
+
+
+class AiControlBackfillHistoryPreviewsBody(BaseModel):
+    machine_id: str
+    provider: str | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class AiControlBackfillHistoryPreviewResult(BaseModel):
+    agent_id: str
+    title: str | None = None
+    backfilled: bool = False
+    last_message_preview: str | None = None
+
+
+class AiControlBackfillHistoryPreviewsResponse(BaseModel):
+    machine_id: str
+    attempted: int = 0
+    backfilled: int = 0
+    skipped: int = 0
+    results: list[AiControlBackfillHistoryPreviewResult] = Field(default_factory=list)
+    history: AiControlHistoryResponse
 
 
 class AiControlPermissionBody(BaseModel):

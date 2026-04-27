@@ -4,6 +4,7 @@ AI 助手的 Tool 函数定义。
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import ipaddress
@@ -18,7 +19,7 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
-from models import ClockRecord, Email, EmailAccount, EmailFolder, Machine, Memo, Task, Todo, TodoList
+from models import ClockRecord, Email, EmailAccount, EmailFolder, Memo, Todo, TodoList
 
 logger = logging.getLogger("assistant_tools")
 
@@ -169,16 +170,16 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
-            "name": "send_kimi_task",
-            "description": "给指定机器上的 Kimi Code 发送编程任务",
+            "name": "start_kimi_session",
+            "description": "在指定机器上启动一个 Kimi Code 会话",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "prompt": {"type": "string", "description": "任务提示词"},
+                    "prompt": {"type": "string", "description": "会话起始提示词"},
                     "machine_id": {"type": "string", "description": "机器 ID（可选，不填则选第一台在线机器）"},
-                    "work_dir": {"type": "string", "description": "工作目录（可选）"},
+                    "work_dir": {"type": "string", "description": "工作目录（必填，bridge 创建会话需要）"},
                 },
-                "required": ["prompt"],
+                "required": ["prompt", "work_dir"],
             },
         },
     },
@@ -208,7 +209,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "get_stats",
-            "description": "获取仪表盘统计数据（任务数、工时等）",
+            "description": "获取仪表盘统计数据（会话数、工时等）",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -488,54 +489,74 @@ def delete_memo(memo_id: int | None = None, title_keyword: str | None = None) ->
         db.close()
 
 
-async def send_kimi_task(prompt: str, machine_id: str | None = None,
-                         work_dir: str | None = None) -> str:
-    from ws.hub import agent_hub
+async def start_kimi_session(prompt: str, machine_id: str | None = None,
+                             work_dir: str | None = None) -> str:
+    from fastapi import HTTPException
 
-    db: Session = SessionLocal()
-    try:
-        if not machine_id:
-            # 选第一台在线机器
-            machine = db.query(Machine).filter(Machine.is_online.is_(True)).first()
-            if not machine:
-                return _ok({"ok": False, "error": "没有在线的机器"})
-            machine_id = machine.id
+    from api.ai_control_schemas import AiControlCreateSessionBody
+    from services.ai_control_bridge import bridge_service
 
-        task = Task(
-            machine_id=machine_id,
-            prompt=prompt,
-            work_dir=work_dir,
-            mode="normal",
-        )
-        db.add(task)
-        db.commit()
-        db.refresh(task)
+    resolved_work_dir = (work_dir or "").strip()
+    if not resolved_work_dir:
+        return _ok({"ok": False, "error": "请提供 work_dir"})
 
-        sent = await agent_hub.send_task(machine_id, {
-            "type": "kimi_task",
-            "task_id": task.id,
-            "prompt": prompt,
-            "work_dir": work_dir,
-            "mode": "normal",
-            "session_id": None,
-        })
-        if not sent:
-            task.status = "failed"
-            db.commit()
-            return _ok({"ok": False, "error": "目标机器不在线"})
+    def create_session_sync() -> dict[str, object]:
+        db: Session = SessionLocal()
+        try:
+            resolved_machine_id = machine_id
+            if not resolved_machine_id:
+                machines = bridge_service.list_machines(db)
+                machine = next((item for item in machines if item.daemon_reachable), None)
+                if not machine:
+                    machine = next((item for item in machines if item.is_online), None)
+                if not machine:
+                    return {"ok": False, "error": "没有可用的 paseo 机器"}
+                resolved_machine_id = machine.id
 
-        return _ok({"ok": True, "task_id": task.id, "machine_id": machine_id})
-    finally:
-        db.close()
+            session = bridge_service.create_session(
+                AiControlCreateSessionBody(
+                    machine_id=resolved_machine_id,
+                    provider="kimi",
+                    cwd=resolved_work_dir,
+                    initial_prompt=prompt,
+                ),
+                db,
+            )
+            return {
+                "ok": True,
+                "agent_id": session.agent_id,
+                "machine_id": session.machine_id,
+                "provider": session.provider,
+                "cwd": session.cwd,
+                "status": session.status,
+            }
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            return {"ok": False, "error": detail}
+        except Exception as exc:
+            logger.exception("start_kimi_session failed")
+            return {"ok": False, "error": f"创建 Kimi 会话失败: {exc}"}
+        finally:
+            db.close()
+
+    return _ok(await asyncio.to_thread(create_session_sync))
 
 
 def list_machines() -> str:
+    from services.ai_control_bridge import bridge_service
+
     db: Session = SessionLocal()
     try:
-        machines = db.query(Machine).all()
+        machines = bridge_service.list_machines(db)
         return _ok([
-            {"id": m.id, "name": m.name, "is_online": m.is_online,
-             "machine_type": m.machine_type}
+            {
+                "id": m.id,
+                "name": m.name,
+                "is_online": m.is_online,
+                "machine_type": m.machine_type,
+                "daemon_reachable": m.daemon_reachable,
+                "runtime_kind": m.runtime_kind,
+            }
             for m in machines
         ])
     finally:
@@ -623,26 +644,24 @@ def fetch_url(url: str) -> str:
 
 
 def get_stats() -> str:
+    from api.stats import build_stats_overview
+
     db: Session = SessionLocal()
     try:
-        total = db.query(Task).count()
-        done = db.query(Task).filter(Task.status == "done").count()
-        failed = db.query(Task).filter(Task.status == "failed").count()
+        overview = build_stats_overview(days=7, db=db)
         todo_total = db.query(Todo).count()
         todo_done = db.query(Todo).filter(Todo.is_done.is_(True)).count()
 
-        # 今日工时
-        today_records = db.query(ClockRecord).filter(
-            ClockRecord.clock_out.is_not(None),
-        ).all()
         today_hours = 0.0
-        today = dt.date.today()
-        for r in today_records:
-            if r.clock_in.date() == today:
-                today_hours += (r.clock_out - r.clock_in).total_seconds() / 3600
+        if overview["daily_work_hours"]:
+            today_hours = float(overview["daily_work_hours"][-1]["total"])
 
         return _ok({
-            "tasks": {"total": total, "done": done, "failed": failed},
+            "sessions": {
+                "total": overview["total_sessions"],
+                "done": overview["done_sessions"],
+                "failed": overview["failed_sessions"],
+            },
             "todos": {"total": todo_total, "done": todo_done, "undone": todo_total - todo_done},
             "today_work_hours": round(today_hours, 2),
         })
@@ -810,7 +829,7 @@ TOOL_FUNCTIONS: dict[str, Any] = {
     "create_memo": create_memo,
     "search_memos": search_memos,
     "delete_memo": delete_memo,
-    "send_kimi_task": send_kimi_task,
+    "start_kimi_session": start_kimi_session,
     "list_machines": list_machines,
     "fetch_url": fetch_url,
     "get_stats": get_stats,

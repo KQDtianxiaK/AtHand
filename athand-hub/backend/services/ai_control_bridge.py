@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import re
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
@@ -21,6 +22,9 @@ except ImportError:
     WEBSOCKET_EXCEPTIONS = (OSError,)
 
 from api.ai_control_schemas import (
+    AiControlBackfillHistoryPreviewsBody,
+    AiControlBackfillHistoryPreviewResult,
+    AiControlBackfillHistoryPreviewsResponse,
     AiControlCapabilitiesOut,
     AiControlCreateSessionBody,
     AiControlHistoryItemOut,
@@ -63,12 +67,14 @@ class AiControlBridgeService:
 
     The first real integration step is intentionally narrow: reach the paseo
     daemon, complete the hello handshake, and map provider snapshots into the
-    AtHand bridge model without touching the legacy Kimi task pipeline.
+    AtHand bridge model.
     """
 
     _RPC_TIMEOUT_SECONDS = 8.0
     _WS_OPEN_TIMEOUT_SECONDS = 5.0
     _PASEO_CLIENT_APP_VERSION = "0.1.50"
+    _HISTORY_PREVIEW_TEXT_LIMIT = 220
+    _HISTORY_PREVIEW_LINE_JOIN_THRESHOLD = 24
 
     def __init__(self) -> None:
         self._machine_daemon_map = self._parse_machine_daemon_map(settings.ai_control_machine_daemons)
@@ -460,6 +466,19 @@ class AiControlBridgeService:
         )
         return responses[0]
 
+    async def _backfill_agent_preview(self, daemon_url: str, *, agent_id: str) -> dict[str, Any]:
+        request_id = self._next_request_id("backfill-preview")
+        request = {
+            "type": "backfill_agent_preview_request",
+            "requestId": request_id,
+            "agentId": agent_id,
+        }
+        _, responses = await self._connect_and_exchange(
+            daemon_url,
+            [(request, "backfill_agent_preview_response")],
+        )
+        return responses[0]
+
     @staticmethod
     def _normalize_permission_response(body: AiControlPermissionBody) -> dict[str, Any]:
         response: dict[str, Any] = {"behavior": body.behavior}
@@ -629,6 +648,7 @@ class AiControlBridgeService:
             created_at=self._parse_timestamp(snapshot.get("createdAt")),
             updated_at=self._parse_timestamp(snapshot.get("updatedAt")),
             attention=bool(snapshot.get("requiresAttention", False)),
+            attention_reason=snapshot.get("attentionReason") if isinstance(snapshot.get("attentionReason"), str) else None,
             persistence_handle=self._persistence_handle_out(snapshot.get("persistence")),
             capabilities=self._capabilities_out(snapshot.get("capabilities")),
         )
@@ -793,10 +813,60 @@ class AiControlBridgeService:
             ),
         )
 
+    def _normalize_history_preview(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+
+        normalized = self._history_preview_excerpt(value)
+        if not normalized:
+            return None
+
+        if len(normalized) <= self._HISTORY_PREVIEW_TEXT_LIMIT:
+            return normalized
+
+        clipped = normalized[: self._HISTORY_PREVIEW_TEXT_LIMIT - 1].rstrip()
+        return f"{clipped}…"
+
+    def _history_preview_excerpt(self, value: str) -> str | None:
+        cleaned = value.replace("\r\n", "\n").replace("\r", "\n")
+        cleaned = re.sub(r"```.*?```", " 代码片段 ", cleaned, flags=re.DOTALL)
+        cleaned = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", cleaned)
+        cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+
+        lines: list[str] = []
+        for raw_line in cleaned.split("\n"):
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            line = re.sub(r"^#{1,6}\s*", "", line)
+            line = re.sub(r"^>+\s*", "", line)
+            line = re.sub(r"^[-*+]\s+", "", line)
+            line = re.sub(r"^\d+[.)]\s+", "", line)
+            line = line.replace("**", "").replace("__", "").replace("~~", "")
+            line = " ".join(line.split())
+            if line:
+                lines.append(line)
+
+        if not lines:
+            return None
+
+        candidate = lines[0]
+        if (
+            len(candidate) < self._HISTORY_PREVIEW_LINE_JOIN_THRESHOLD
+            and len(lines) > 1
+            and not candidate.endswith((":", "："))
+        ):
+            candidate = f"{candidate} {lines[1]}"
+
+        return " ".join(candidate.split()) or None
+
     def _history_item_out(self, machine_id: str, entry: dict[str, Any]) -> AiControlHistoryItemOut | None:
         agent = entry.get("agent")
         if not isinstance(agent, dict):
             return None
+
+        last_message_preview = self._normalize_history_preview(entry.get("lastMessage"))
 
         return AiControlHistoryItemOut(
             agent_id=str(agent.get("id") or ""),
@@ -807,10 +877,40 @@ class AiControlBridgeService:
             status=str(agent.get("status") or "unknown"),
             created_at=self._parse_timestamp(agent.get("createdAt")),
             updated_at=self._parse_timestamp(agent.get("updatedAt")),
-            last_message_preview=None,
+            last_message_preview=last_message_preview,
             attention=bool(agent.get("requiresAttention", False)),
+            attention_reason=agent.get("attentionReason") if isinstance(agent.get("attentionReason"), str) else None,
             persistence_handle=self._persistence_handle_out(agent.get("persistence")),
         )
+
+    @staticmethod
+    def _history_entry_agent_id(entry: dict[str, Any]) -> str | None:
+        agent = entry.get("agent")
+        if not isinstance(agent, dict):
+            return None
+        agent_id = agent.get("id")
+        if not isinstance(agent_id, str) or not agent_id:
+            return None
+        return agent_id
+
+    def _closed_history_candidates(
+        self,
+        machine_id: str,
+        entries: list[dict[str, Any]],
+        *,
+        provider: str | None,
+    ) -> list[AiControlHistoryItemOut]:
+        candidates: list[AiControlHistoryItemOut] = []
+        for entry in entries:
+            item = self._history_item_out(machine_id, entry)
+            if item is None:
+                continue
+            if provider is not None and item.provider != provider:
+                continue
+            if item.status.strip().lower() != "closed":
+                continue
+            candidates.append(item)
+        return candidates
 
     def _machine_payload(
         self,
@@ -1020,14 +1120,10 @@ class AiControlBridgeService:
                 limit=limit,
             )
         )
-        entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+        entries = [entry for entry in payload.get("entries", []) if isinstance(entry, dict)]
         items = [
             item
-            for item in (
-                self._history_item_out(machine.id, entry)
-                for entry in entries
-                if isinstance(entry, dict)
-            )
+            for item in (self._history_item_out(machine.id, entry) for entry in entries)
             if item is not None and (provider is None or item.provider == provider)
         ]
         page_info = payload.get("pageInfo") if isinstance(payload.get("pageInfo"), dict) else {}
@@ -1212,10 +1308,14 @@ class AiControlBridgeService:
 
         first_error: HTTPException | None = None
         aggregated_items: list[AiControlHistoryItemOut] = []
+        seen_daemon_urls: set[str] = set()
         for machine in machines:
             daemon_url = self._daemon_url_for_machine(machine.id)
             if not daemon_url:
                 continue
+            if daemon_url in seen_daemon_urls:
+                continue
+            seen_daemon_urls.add(daemon_url)
             try:
                 response = self._get_history_from_machine(
                     machine=machine,
@@ -1246,6 +1346,90 @@ class AiControlBridgeService:
         if first_error is not None:
             raise first_error
         return AiControlHistoryResponse(items=[], next_cursor=None)
+
+    def backfill_history_previews(
+        self,
+        *,
+        body: AiControlBackfillHistoryPreviewsBody,
+        db: Session,
+    ) -> AiControlBackfillHistoryPreviewsResponse:
+        machine = db.query(Machine).filter(Machine.id == body.machine_id).first()
+        if not machine:
+            raise HTTPException(404, "机器不存在")
+
+        daemon_url = self._daemon_url_for_machine(machine.id)
+        if not daemon_url:
+            raise HTTPException(412, "该机器尚未配置 paseo daemon 地址")
+
+        try:
+            payload = self._run_async(
+                self._fetch_agent_history(
+                    daemon_url,
+                    status="closed",
+                    cursor=None,
+                    limit=body.limit,
+                )
+            )
+        except AiControlBridgeTimeoutError as exc:
+            raise HTTPException(504, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(412, str(exc)) from exc
+        except (AiControlBridgeTransportError, AiControlBridgeProtocolError) as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+        entries = [entry for entry in payload.get("entries", []) if isinstance(entry, dict)]
+        candidates = [
+            item
+            for item in self._closed_history_candidates(machine.id, entries, provider=body.provider)
+            if item.last_message_preview is None and item.persistence_handle is not None
+        ]
+
+        results: list[AiControlBackfillHistoryPreviewResult] = []
+        backfilled_count = 0
+        for item in candidates:
+            try:
+                payload = self._run_async(
+                    self._backfill_agent_preview(
+                        daemon_url,
+                        agent_id=item.agent_id,
+                    )
+                )
+            except AiControlBridgeTimeoutError as exc:
+                raise HTTPException(504, str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(412, str(exc)) from exc
+            except (AiControlBridgeTransportError, AiControlBridgeProtocolError) as exc:
+                raise HTTPException(502, str(exc)) from exc
+
+            preview = self._normalize_history_preview(payload.get("lastMessage"))
+            backfilled = bool(payload.get("backfilled", False)) and preview is not None
+            if backfilled:
+                backfilled_count += 1
+            results.append(
+                AiControlBackfillHistoryPreviewResult(
+                    agent_id=item.agent_id,
+                    title=item.title,
+                    backfilled=backfilled,
+                    last_message_preview=preview,
+                )
+            )
+
+        history = self.get_history(
+            machine_id=body.machine_id,
+            provider=body.provider,
+            status=None,
+            cursor=None,
+            limit=body.limit,
+            db=db,
+        )
+        return AiControlBackfillHistoryPreviewsResponse(
+            machine_id=body.machine_id,
+            attempted=len(candidates),
+            backfilled=backfilled_count,
+            skipped=max(len(self._closed_history_candidates(machine.id, entries, provider=body.provider)) - len(candidates), 0),
+            results=results,
+            history=history,
+        )
 
     def respond_permission(
         self,

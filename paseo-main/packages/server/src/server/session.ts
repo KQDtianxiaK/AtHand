@@ -1770,6 +1770,8 @@ export class Session {
         return this.handleDeleteAgentRequest(msg.agentId, msg.requestId);
       case "archive_agent_request":
         return this.handleArchiveAgentRequest(msg.agentId, msg.requestId);
+      case "backfill_agent_preview_request":
+        return this.handleBackfillAgentPreviewRequest(msg.agentId, msg.requestId);
       case "close_items_request":
         return this.handleCloseItemsRequest(msg);
       case "update_agent_request":
@@ -2178,6 +2180,82 @@ export class Session {
         requestId,
       },
     });
+  }
+
+  private async handleBackfillAgentPreviewRequest(
+    agentId: string,
+    requestId: string,
+  ): Promise<void> {
+    try {
+      const payload = await this.backfillAgentPreview(agentId);
+      this.emit({
+        type: "backfill_agent_preview_response",
+        payload: {
+          requestId,
+          agentId,
+          backfilled: payload.backfilled,
+          lastMessage: payload.lastMessage,
+          error: null,
+        },
+      });
+    } catch (error) {
+      const code = error instanceof SessionRequestError ? error.code : "backfill_agent_preview_failed";
+      const message = error instanceof Error ? error.message : "Failed to backfill agent preview";
+      this.sessionLogger.error({ err: error, agentId }, "Failed to backfill agent preview");
+      this.emit({
+        type: "rpc_error",
+        payload: {
+          requestId,
+          requestType: "backfill_agent_preview_request",
+          error: message,
+          code,
+        },
+      });
+    }
+  }
+
+  private async backfillAgentPreview(
+    agentId: string,
+  ): Promise<{ backfilled: boolean; lastMessage: string | null }> {
+    const existing = await this.agentStorage.get(agentId);
+    if (!existing) {
+      throw new SessionRequestError("agent_not_found", `Agent not found: ${agentId}`);
+    }
+
+    if (existing.lastMessage) {
+      return {
+        backfilled: false,
+        lastMessage: existing.lastMessage,
+      };
+    }
+
+    if (!existing.persistence) {
+      return {
+        backfilled: false,
+        lastMessage: null,
+      };
+    }
+
+    const wasLive = Boolean(this.agentManager.getAgent(agentId));
+    if (!wasLive) {
+      await ensureAgentLoaded(agentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+    }
+
+    const lastMessage = await this.agentManager.getLastAssistantMessage(agentId);
+
+    if (!wasLive && this.agentManager.getAgent(agentId)) {
+      await this.agentManager.closeAgent(agentId);
+    }
+
+    const refreshed = await this.agentStorage.get(agentId);
+    return {
+      backfilled: Boolean(refreshed?.lastMessage),
+      lastMessage: refreshed?.lastMessage ?? lastMessage,
+    };
   }
 
   private async archiveStoredAgentForClose(
@@ -5756,6 +5834,15 @@ export class Session {
     });
 
     const pagedEntries = matchedEntries.slice(0, limit);
+    const responseEntries =
+      request.type === "fetch_agent_history_request"
+        ? await Promise.all(
+            pagedEntries.map(async (entry) => ({
+              ...entry,
+              lastMessage: await this.agentManager.getLastAssistantMessage(entry.agent.id),
+            })),
+          )
+        : pagedEntries;
     const hasMore = matchedEntries.length > limit;
     const nextCursor =
       hasMore && pagedEntries.length > 0
@@ -5763,7 +5850,7 @@ export class Session {
         : null;
 
     return {
-      entries: pagedEntries,
+      entries: responseEntries,
       pageInfo: {
         nextCursor,
         prevCursor: request.page?.cursor ?? null,

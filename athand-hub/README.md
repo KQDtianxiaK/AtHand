@@ -30,20 +30,9 @@ npm run dev
 
 浏览器打开 `http://localhost:5173`
 
-### 3. Agent Daemon（在目标机器上）
+### 3. Paseo daemon（本机 AI Control bridge）
 
-```bash
-cd agent-daemon
-cp config.example.yaml config.yaml
-# 编辑 config.yaml：设置 hub_url、machine_id、agent_token
-
-bash install.sh
-# 或直接运行：python daemon.py
-```
-
-### 4. Paseo daemon（本机 AI Control bridge）
-
-AtHand 新的 AI 管控主路径不再直接依赖旧的 agent-daemon，而是通过后端 bridge 去连接 paseo daemon。
+AtHand 当前的 AI 管控主路径通过后端 bridge 去连接 paseo daemon。
 
 在当前工作区里，推荐直接运行 VS Code 任务 `Start Paseo daemon (AtHand)`，或手动执行：
 

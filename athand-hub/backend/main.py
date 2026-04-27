@@ -50,34 +50,24 @@ app.add_middleware(
 
 # ---- 注册路由 ----
 from api.auth import router as auth_router
-from api.agents import router as agents_router
-from api.tasks import router as tasks_router
-from api.files import router as files_router
 from api.memos import router as memos_router
 from api.todos import router as todos_router
 from api.clock import router as clock_router
 from api.stats import router as stats_router
-from api.kimi_sessions import router as kimi_sessions_router
 from api.assistant import router as assistant_router
 from api.ai_control import router as ai_control_router
 from api.email import router as email_router
 from api.news import router as news_router
-from ws.hub import router as ws_router
 
 app.include_router(auth_router)
-app.include_router(agents_router)
-app.include_router(tasks_router)
-app.include_router(files_router)
 app.include_router(memos_router)
 app.include_router(todos_router)
 app.include_router(clock_router)
 app.include_router(stats_router)
-app.include_router(kimi_sessions_router)
 app.include_router(assistant_router)
 app.include_router(ai_control_router)
 app.include_router(email_router)
 app.include_router(news_router)
-app.include_router(ws_router)
 
 
 @app.on_event("startup")

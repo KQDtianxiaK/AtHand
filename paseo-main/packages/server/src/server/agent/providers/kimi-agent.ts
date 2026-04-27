@@ -1,5 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Logger } from "pino";
 
@@ -76,6 +79,110 @@ interface KimiAgentClientOptions {
 interface ExecuteTurnResult {
   result: AgentRunResult;
   turnId: string;
+}
+
+function getKimiShareDir(): string {
+  return process.env.KIMI_SHARE_DIR?.trim() || join(homedir(), ".kimi");
+}
+
+function getKimiContextFilePath(cwd: string, sessionId: string): string {
+  const workDirHash = createHash("md5").update(cwd).digest("hex");
+  return join(getKimiShareDir(), "sessions", workDirHash, sessionId, "context.jsonl");
+}
+
+function collectKimiContextTextParts(content: unknown): string[] {
+  if (typeof content === "string") {
+    return content.trim() ? [content.trim()] : [];
+  }
+
+  if (Array.isArray(content)) {
+    return content.flatMap((item) => collectKimiContextTextParts(item));
+  }
+
+  if (!content || typeof content !== "object") {
+    return [];
+  }
+
+  const record = content as Record<string, unknown>;
+  if (record.type === "text" && typeof record.text === "string") {
+    return record.text.trim() ? [record.text.trim()] : [];
+  }
+
+  if (typeof record.text === "string" && !("type" in record)) {
+    return record.text.trim() ? [record.text.trim()] : [];
+  }
+
+  if ("content" in record) {
+    return collectKimiContextTextParts(record.content);
+  }
+
+  return [];
+}
+
+function extractKimiContextMessageText(content: unknown): string | null {
+  const text = collectKimiContextTextParts(content).join("\n\n").trim();
+  return text || null;
+}
+
+async function loadPersistedKimiHistoryEvents(
+  cwd: string,
+  sessionId: string,
+  logger: Logger,
+): Promise<AgentStreamEvent[]> {
+  const contextPath = getKimiContextFilePath(cwd, sessionId);
+  let raw = "";
+
+  try {
+    raw = await readFile(contextPath, "utf8");
+  } catch (error) {
+    logger.debug({ err: error, contextPath, sessionId }, "Kimi persisted context unavailable");
+    return [];
+  }
+
+  const events: AgentStreamEvent[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    let record: unknown;
+    try {
+      record = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+
+    if (!record || typeof record !== "object") {
+      continue;
+    }
+
+    const role = (record as { role?: unknown }).role;
+    const content = (record as { content?: unknown }).content;
+    const text = extractKimiContextMessageText(content);
+    if (!text) {
+      continue;
+    }
+
+    if (role === "user") {
+      events.push({
+        type: "timeline",
+        provider: KIMI_PROVIDER_ID,
+        item: { type: "user_message", text },
+      });
+      continue;
+    }
+
+    if (role === "assistant") {
+      events.push({
+        type: "timeline",
+        provider: KIMI_PROVIDER_ID,
+        item: { type: "assistant_message", text },
+      });
+    }
+  }
+
+  return events;
 }
 
 export class KimiAgentClient implements AgentClient {
@@ -233,7 +340,14 @@ class KimiAgentSession implements AgentSession {
   }
 
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
-    for (const event of this.eventHistory) {
+    const historyEvents =
+      this.eventHistory.length > 0
+        ? this.eventHistory
+        : this.currentSessionId
+          ? await loadPersistedKimiHistoryEvents(this.config.cwd, this.currentSessionId, this.logger)
+          : [];
+
+    for (const event of historyEvents) {
       yield event;
     }
   }
