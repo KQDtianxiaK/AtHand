@@ -23,7 +23,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
     document.querySelector('meta[name="theme-color"]')?.setAttribute(
       'content',
-      theme === 'dark' ? '#1e293b' : '#ffffff'
+      theme === 'dark' ? '#0d1218' : '#f5f7fa'
     )
     localStorage.setItem('theme', theme)
   }, [theme])
