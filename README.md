@@ -24,6 +24,7 @@ AtHand 是一个 AI 原生的个人远程工作台。它试图把 AI 会话、�
 - [截图预览](#截图预览)
 - [系统架构](#系统架构)
 - [仓库导航](#仓库导航)
+- [引用说明](#引用说明)
 - [设计理念](#设计理念)
 - [核心能力](#核心能力)
 - [技术栈](#技术栈)
@@ -59,10 +60,10 @@ AtHand 不是一个单点功能产品，而是一套 AI-first 的日常工作台
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/screenshots/dashboard-overview.jpg" alt="AtHand dashboard overview" />
+      <img src="docs/screenshots/dashboard-overview.png" alt="AtHand dashboard overview" />
     </td>
     <td width="50%">
-      <img src="docs/screenshots/ai-control-board.jpg" alt="AtHand AI control board" />
+      <img src="docs/screenshots/ai-control-board.png" alt="AtHand AI control board" />
     </td>
   </tr>
   <tr>
@@ -72,7 +73,7 @@ AtHand 不是一个单点功能产品，而是一套 AI-first 的日常工作台
 </table>
 
 <p align="center">
-  <img src="docs/screenshots/embedded-assistant.jpg" alt="AtHand embedded assistant" width="70%" />
+  <img src="docs/screenshots/embedded-assistant.png" alt="AtHand embedded assistant" width="70%" />
 </p>
 
 <p align="center"><strong>内嵌 AI 助手</strong></p>
@@ -113,8 +114,12 @@ flowchart LR
 | [athand-hub/README.md](athand-hub/README.md) | AtHand Hub 子项目说明 |
 | [paseo-main/](paseo-main/) | 本地联调使用的 paseo 工作副本 |
 | [vibe-kanban-main/](vibe-kanban-main/) | vibe-kanban 交互形态参考 |
-| [follow-builders-main/](follow-builders-main/) | 相关参考项目与实验区 |
 | [docs/screenshots/](docs/screenshots/) | README 使用的项目截图资源 |
+
+## 引用说明
+
+- [paseo](https://github.com/getpaseo/paseo)：AtHand V2 把 paseo 作为外部 agent runtime 与 daemon 层来接入，当前仓库中的 [paseo-main/](paseo-main/) 是本地联调与桥接开发使用的工作副本。
+- [vibe-kanban](https://github.com/BloopAI/vibe-kanban)：AtHand V2 的 AI 管控工作区在会话看板、工作区编排和 timeline 交互上明确参考了 vibe-kanban，当前仓库中的 [vibe-kanban-main/](vibe-kanban-main/) 是产品形态与交互设计参考副本。
 
 ## 设计理念
 

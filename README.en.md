@@ -24,6 +24,7 @@ In this document:
 - [Screenshots](#screenshots)
 - [Architecture](#architecture)
 - [Repository Guide](#repository-guide)
+- [References](#references)
 - [Design Philosophy](#design-philosophy)
 - [Core Capabilities](#core-capabilities)
 - [Tech Stack](#tech-stack)
@@ -59,10 +60,10 @@ Why the V1/V2 distinction matters:
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/screenshots/dashboard-overview.jpg" alt="AtHand dashboard overview" />
+      <img src="docs/screenshots/dashboard-overview.png" alt="AtHand dashboard overview" />
     </td>
     <td width="50%">
-      <img src="docs/screenshots/ai-control-board.jpg" alt="AtHand AI control board" />
+      <img src="docs/screenshots/ai-control-board.png" alt="AtHand AI control board" />
     </td>
   </tr>
   <tr>
@@ -72,7 +73,7 @@ Why the V1/V2 distinction matters:
 </table>
 
 <p align="center">
-  <img src="docs/screenshots/embedded-assistant.jpg" alt="AtHand embedded assistant" width="70%" />
+  <img src="docs/screenshots/embedded-assistant.png" alt="AtHand embedded assistant" width="70%" />
 </p>
 
 <p align="center"><strong>Embedded AI assistant</strong></p>
@@ -113,8 +114,12 @@ This diagram represents V2: the frontend remains a unified workspace shell, whil
 | [athand-hub/README.md](athand-hub/README.md) | AtHand Hub subproject README |
 | [paseo-main/](paseo-main/) | local paseo working copy used for integration |
 | [vibe-kanban-main/](vibe-kanban-main/) | interaction and product-shape reference |
-| [follow-builders-main/](follow-builders-main/) | related references and experiments |
 | [docs/screenshots/](docs/screenshots/) | screenshot assets used by the homepage |
+
+## References
+
+- [paseo](https://github.com/getpaseo/paseo): AtHand V2 uses paseo as the external agent runtime and daemon layer, and [paseo-main/](paseo-main/) in this repository is the local working copy used for integration and bridge development.
+- [vibe-kanban](https://github.com/BloopAI/vibe-kanban): AtHand V2 explicitly references vibe-kanban for its AI control board, workspace orchestration, and timeline interaction model, and [vibe-kanban-main/](vibe-kanban-main/) in this repository is the local reference copy for product shape and interaction design.
 
 ## Design Philosophy
 
